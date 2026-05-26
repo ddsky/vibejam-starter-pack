@@ -107,6 +107,12 @@ export function launchUnit(unit: Unit, vx: number, vy: number): void {
   unit.setFacingFromVelocity(vx, vy); // unit immediately faces its slide direction
   const body = unit.body as Phaser.Physics.Arcade.Body;
   body.setVelocity(vx, vy);
-  body.setDrag(FRICTION, FRICTION);
+  // NOTE: we do NOT set body.setDrag here. Phaser's drag is applied per-axis,
+  // which makes the smaller velocity component hit 0 before the larger one
+  // and the unit visibly curves toward the dominant axis. Instead,
+  // GameScene.update applies drag along the velocity vector, preserving
+  // the slide's direction perfectly.
   sounds.playLaunch();
 }
+// FRICTION import kept for future use; suppress unused warning.
+void FRICTION;

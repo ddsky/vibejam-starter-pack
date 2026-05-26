@@ -114,7 +114,7 @@ export class CombatResolver {
       const kbSpeed = Math.max(140, incomingSpeed * massRatio * otherKbMult * transferFactor);
       const otherBody = other.body as Phaser.Physics.Arcade.Body;
       otherBody.setVelocity(nx * kbSpeed, ny * kbSpeed);
-      otherBody.setDrag(FRICTION, FRICTION);
+      // No setDrag — direction-preserving drag is applied in GameScene.update.
       other.isMoving = true;
       other.knockedBack = true;
       other.hasHitThisSlide = false;
@@ -209,7 +209,7 @@ export class CombatResolver {
       const kbSpeed = Math.max(180, speed * kbMult * KNOCKBACK_VELOCITY_FACTOR * kbBoost);
       const defenderBody = defender.body as Phaser.Physics.Arcade.Body;
       defenderBody.setVelocity(nx * kbSpeed, ny * kbSpeed);
-      defenderBody.setDrag(FRICTION, FRICTION);
+      // No setDrag — direction-preserving drag is applied in GameScene.update.
       defender.isMoving = true;
       defender.knockedBack = true;
       defender.hasHitThisSlide = false;

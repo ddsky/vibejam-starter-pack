@@ -7,6 +7,7 @@ import {
   FIELD_HEIGHT,
   REST_SPEED,
   ARROW_REST_SPEED,
+  FRICTION,
   PLAYFIELD_LEFT,
   PLAYFIELD_TOP,
   PLAYFIELD_RIGHT,
@@ -170,11 +171,25 @@ export class GameScene extends Phaser.Scene {
         if (u.y === minY || u.y === maxY) body.velocity.y *= -0.55;
       }
       if (!u.isMoving) return;
+      // Direction-preserving drag: reduce speed along the velocity vector
+      // instead of per-axis. Phaser's built-in setDrag works per-axis, which
+      // causes diagonal slides to curve toward the dominant axis as the
+      // smaller component hits 0 first. Here we scale velocity uniformly so
+      // the trajectory stays a clean straight line.
+      const speed = body.velocity.length();
+      if (speed > 0) {
+        const newSpeed = Math.max(0, speed - FRICTION * dt);
+        if (newSpeed <= 0) {
+          body.velocity.set(0, 0);
+        } else {
+          body.velocity.scale(newSpeed / speed);
+        }
+      }
       // apply curve (rotate velocity vector)
       if (u.curveAngularVelocity !== 0) {
         body.velocity.rotate(u.curveAngularVelocity * dt);
       }
-      if (body.speed < REST_SPEED) {
+      if (body.velocity.length() < REST_SPEED) {
         // NOTE: we do NOT update facing from velocity here. Phaser's per-axis
         // drag corrupts velocity direction in the final frames (one axis hits
         // 0 first), so trusting it would snap facing to a cardinal angle.
