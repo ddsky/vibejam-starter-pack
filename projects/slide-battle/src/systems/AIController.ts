@@ -14,8 +14,16 @@ import {
   FRICTION,
   MAX_LAUNCH_SPEED,
   MIN_LAUNCH_SPEED,
+  PLAYFIELD_BOTTOM,
+  PLAYFIELD_LEFT,
+  PLAYFIELD_RIGHT,
+  PLAYFIELD_TOP,
 } from "../config/balance";
 import { launchUnit } from "./DragInput";
+
+const AI_OBSTACLE_CLEARANCE = 10;
+const POSITIONING_POWER_LEVELS = [0.38, 0.52, 0.66, 0.8];
+const POSITIONING_ANGLE_OFFSETS_DEG = [0, -18, 18, -34, 34, -52, 52, -72, 72, -96, 96];
 
 export interface AIDeps {
   scene: Phaser.Scene;
@@ -130,7 +138,7 @@ export class AIController {
       const best = candidates.filter((c) => c.score >= maxScore - 0.5);
       chosen = Phaser.Math.RND.pick(best);
     } else {
-      chosen = this.positioningAction(aiUnits, enemies);
+      chosen = this.positioningAction(aiUnits, enemies, allUnits, obstacles);
     }
 
     if (chosen) this.executeAction(chosen);
@@ -151,7 +159,7 @@ export class AIController {
     const dist = Math.hypot(dx, dy);
     if (dist < 1) return null;
     // path-clear check (units + obstacles)
-    if (!hasClearPath(attacker.x, attacker.y, target.x, target.y, all, obstacles, [attacker, target], target.radius)) return null;
+    if (!hasClearPath(attacker.x, attacker.y, target.x, target.y, all, obstacles, [attacker, target], target.radius, attacker.radius)) return null;
 
     const speed = neededSlideSpeed(dist);
     if (speed === null) return null;
@@ -211,41 +219,134 @@ export class AIController {
     };
   }
 
-  private positioningAction(aiUnits: Unit[], enemies: Unit[]): MoveAction | null {
-    // pick AI unit closest to any enemy, slide toward nearest enemy at 60% power
-    let bestAttacker: Unit | null = null;
-    let bestTarget: Unit | null = null;
-    let bestDist = Infinity;
-    for (const a of aiUnits) {
-      // archers stay back when positioning; prefer melee units
-      const skip = a.unitType === "archer" && aiUnits.some((x) => x.unitType !== "archer");
-      if (skip) continue;
-      for (const t of enemies) {
-        const d = Phaser.Math.Distance.Between(a.x, a.y, t.x, t.y);
-        if (d < bestDist) {
-          bestDist = d;
-          bestAttacker = a;
-          bestTarget = t;
+  private positioningAction(
+    aiUnits: Unit[],
+    enemies: Unit[],
+    allUnits: Unit[],
+    obstacles: Obstacle[],
+  ): MoveAction | null {
+    const hasMelee = aiUnits.some((x) => x.unitType !== "archer");
+
+    for (const includeArchers of [!hasMelee, true]) {
+      let best: MoveAction | null = null;
+
+      for (const attacker of aiUnits) {
+        // Archers already get ranged opportunities most turns; when melee is alive,
+        // spend fallback movement on the units that actually need lanes opened first.
+        if (!includeArchers && attacker.unitType === "archer") continue;
+
+        for (const target of enemies) {
+          const currentDist = Phaser.Math.Distance.Between(attacker.x, attacker.y, target.x, target.y);
+          if (currentDist < 1) continue;
+
+          const targetAngle = Math.atan2(target.y - attacker.y, target.x - attacker.x);
+          const directLaneOpen = hasClearPath(
+            attacker.x,
+            attacker.y,
+            target.x,
+            target.y,
+            allUnits,
+            obstacles,
+            [attacker, target],
+            target.radius,
+            attacker.radius,
+          );
+
+          for (const angleOffsetDeg of POSITIONING_ANGLE_OFFSETS_DEG) {
+            const angle = targetAngle + Phaser.Math.DegToRad(angleOffsetDeg);
+            for (const power of POSITIONING_POWER_LEVELS) {
+              const speed = Phaser.Math.Linear(MIN_LAUNCH_SPEED, MAX_LAUNCH_SPEED, power);
+              const vx = Math.cos(angle) * speed;
+              const vy = Math.sin(angle) * speed;
+              const candidate = this.evaluatePositioningMove(
+                attacker,
+                target,
+                vx,
+                vy,
+                currentDist,
+                directLaneOpen,
+                allUnits,
+                obstacles,
+                Math.abs(angleOffsetDeg),
+              );
+              if (candidate && (!best || candidate.score > best.score)) best = candidate;
+            }
+          }
         }
       }
+
+      if (best) return best;
     }
-    if (!bestAttacker || !bestTarget) return null;
-    const dx = bestTarget.x - bestAttacker.x;
-    const dy = bestTarget.y - bestAttacker.y;
-    const dist = Math.hypot(dx, dy) || 1;
-    const speed = Phaser.Math.Linear(MIN_LAUNCH_SPEED, MAX_LAUNCH_SPEED, 0.6);
+
+    return null;
+  }
+
+  private evaluatePositioningMove(
+    attacker: Unit,
+    target: Unit,
+    vx: number,
+    vy: number,
+    currentDist: number,
+    directLaneOpen: boolean,
+    allUnits: Unit[],
+    obstacles: Obstacle[],
+    angleOffsetDeg: number,
+  ): MoveAction | null {
+    const speed = Math.hypot(vx, vy);
+    if (speed < 1) return null;
+
+    const travel = stoppingDistance(speed);
+    const endX = attacker.x + (vx / speed) * travel;
+    const endY = attacker.y + (vy / speed) * travel;
+    if (!isInsidePlayfield(endX, endY, attacker.radius)) return null;
+
+    if (!hasClearPath(attacker.x, attacker.y, endX, endY, allUnits, obstacles, [attacker], 0, attacker.radius)) {
+      return null;
+    }
+
+    const endDist = Phaser.Math.Distance.Between(endX, endY, target.x, target.y);
+    const progress = currentDist - endDist;
+    const laneAfterMove = hasClearPath(
+      endX,
+      endY,
+      target.x,
+      target.y,
+      allUnits,
+      obstacles,
+      [attacker, target],
+      target.radius,
+      attacker.radius,
+    );
+
+    if (!laneAfterMove && progress < 24 && directLaneOpen) return null;
+    if (progress < -55 && !laneAfterMove) return null;
+
+    const clearance = nearestObstacleClearance(endX, endY, obstacles, attacker.radius);
+    const clearanceScore = Phaser.Math.Clamp(clearance, 0, 120) * 0.045;
+    const laneBonus = laneAfterMove ? (directLaneOpen ? 10 : 28) : 0;
+    const roleBonus = attacker.unitType === "knight" ? 2 : attacker.unitType === "swordsman" ? 1 : 0;
+    const score =
+      progress * 0.12 -
+      endDist * 0.006 -
+      angleOffsetDeg * 0.035 +
+      clearanceScore +
+      laneBonus +
+      roleBonus;
+
     return {
       kind: "move",
-      attacker: bestAttacker,
-      vx: (dx / dist) * speed,
-      vy: (dy / dist) * speed,
-      score: 0,
+      attacker,
+      vx,
+      vy,
+      score,
     };
   }
 
   private executeAction(action: Action): void {
-    const angleNoise = Phaser.Math.DegToRad(Phaser.Math.RND.realInRange(-3, 3));
-    const speedNoise = Phaser.Math.RND.realInRange(0.95, 1.05);
+    const angleNoiseRange = action.kind === "ranged" ? 3 : 1;
+    const speedNoiseRange = action.kind === "ranged" ? 0.05 : 0.02;
+    const angleNoise = Phaser.Math.DegToRad(Phaser.Math.RND.realInRange(-angleNoiseRange, angleNoiseRange));
+    const speedNoise = Phaser.Math.RND.realInRange(1 - speedNoiseRange, 1 + speedNoiseRange);
     const v = new Phaser.Math.Vector2(action.vx, action.vy);
     v.rotate(angleNoise);
     v.scale(speedNoise);
@@ -270,6 +371,20 @@ function neededSlideSpeed(dist: number): number | null {
   if (raw < MIN_LAUNCH_SPEED) return MIN_LAUNCH_SPEED;
   if (raw > MAX_LAUNCH_SPEED) return raw < MAX_LAUNCH_SPEED * 1.4 ? MAX_LAUNCH_SPEED : null;
   return raw;
+}
+
+function stoppingDistance(speed: number): number {
+  // distance = v^2 / (2 * FRICTION)
+  return (speed * speed) / (2 * FRICTION);
+}
+
+function isInsidePlayfield(x: number, y: number, radius: number): boolean {
+  return (
+    x >= PLAYFIELD_LEFT + radius &&
+    x <= PLAYFIELD_RIGHT - radius &&
+    y >= PLAYFIELD_TOP + radius &&
+    y <= PLAYFIELD_BOTTOM - radius
+  );
 }
 
 /**
@@ -302,6 +417,7 @@ function hasClearPath(
   obstacles: Obstacle[],
   ignore: Unit[],
   targetRadius: number,
+  movingRadius: number,
 ): boolean {
   const line = new Phaser.Geom.Line(x1, y1, x2, y2);
   const targetDist = Phaser.Math.Distance.Between(x1, y1, x2, y2);
@@ -309,15 +425,50 @@ function hasClearPath(
     if (ignore.includes(u)) continue;
     if (!u.isAlive()) continue;
     const distToAttacker = Phaser.Math.Distance.Between(x1, y1, u.x, u.y);
-    if (distToAttacker >= targetDist - targetRadius) continue;
-    const circle = new Phaser.Geom.Circle(u.x, u.y, u.radius + 4);
+    if (targetRadius > 0 && distToAttacker >= targetDist - targetRadius) continue;
+    const circle = new Phaser.Geom.Circle(u.x, u.y, u.radius + movingRadius + 4);
     if (Phaser.Geom.Intersects.LineToCircle(line, circle)) return false;
   }
   for (const o of obstacles) {
-    const w = o.displayWidth;
-    const h = o.displayHeight;
-    const rect = new Phaser.Geom.Rectangle(o.x - w / 2, o.y - h / 2, w, h);
-    if (Phaser.Geom.Intersects.LineToRectangle(line, rect)) return false;
+    if (lineHitsObstacle(line, o, movingRadius, AI_OBSTACLE_CLEARANCE)) return false;
   }
   return true;
+}
+
+function lineHitsObstacle(
+  line: Phaser.Geom.Line,
+  obstacle: Obstacle,
+  movingRadius: number,
+  safetyMargin: number,
+): boolean {
+  const softRect = obstacleRect(obstacle, movingRadius + safetyMargin);
+  if (!Phaser.Geom.Intersects.LineToRectangle(line, softRect)) return false;
+
+  // A unit already beside a wall can be inside the conservative margin. Let it
+  // leave that cushion, but never let a planned path cross the real collision
+  // envelope.
+  if (softRect.contains(line.x1, line.y1) && !softRect.contains(line.x2, line.y2)) {
+    const hardRect = obstacleRect(obstacle, movingRadius + 1);
+    return Phaser.Geom.Intersects.LineToRectangle(line, hardRect);
+  }
+
+  return true;
+}
+
+function obstacleRect(obstacle: Obstacle, padding: number): Phaser.Geom.Rectangle {
+  const w = obstacle.displayWidth + padding * 2;
+  const h = obstacle.displayHeight + padding * 2;
+  return new Phaser.Geom.Rectangle(obstacle.x - w / 2, obstacle.y - h / 2, w, h);
+}
+
+function nearestObstacleClearance(x: number, y: number, obstacles: Obstacle[], radius: number): number {
+  let best = Infinity;
+  for (const obstacle of obstacles) {
+    const halfW = obstacle.displayWidth / 2;
+    const halfH = obstacle.displayHeight / 2;
+    const dx = Math.max(Math.abs(x - obstacle.x) - halfW, 0);
+    const dy = Math.max(Math.abs(y - obstacle.y) - halfH, 0);
+    best = Math.min(best, Math.hypot(dx, dy) - radius);
+  }
+  return best === Infinity ? 120 : best;
 }
