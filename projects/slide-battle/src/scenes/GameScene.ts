@@ -6,8 +6,13 @@ import {
   FIELD_WIDTH,
   FIELD_HEIGHT,
   REST_SPEED,
-  ARROW_REST_SPEED,
   FRICTION,
+  ARROW_GRAVITY,
+  ARROW_VH_MIN,
+  ARROW_VH_MAX,
+  ARROW_HSPEED_MIN,
+  ARROW_HSPEED_MAX,
+  ARROW_HIT_HEIGHT,
   PLAYFIELD_LEFT,
   PLAYFIELD_TOP,
   PLAYFIELD_RIGHT,
@@ -29,7 +34,7 @@ import { spawnDamagePopup } from "../ui/DamagePopup";
 export class GameScene extends Phaser.Scene {
   units!: Phaser.Physics.Arcade.Group;
   obstacles!: Phaser.Physics.Arcade.StaticGroup;
-  arrows!: Phaser.Physics.Arcade.Group;
+  arrows: Arrow[] = [];
   dragInput!: DragInput;
   archerInput!: ArcherInput;
   knightCurve!: KnightCurve;
@@ -49,7 +54,7 @@ export class GameScene extends Phaser.Scene {
 
     this.units = this.physics.add.group({ classType: Unit, runChildUpdate: true });
     this.obstacles = this.physics.add.staticGroup();
-    this.arrows = this.physics.add.group({ classType: Arrow });
+    this.arrows = [];
 
     for (const spawn of OBSTACLE_SPAWNS) {
       const o = new Obstacle(this, spawn.x, spawn.y, spawn.width, spawn.height);
@@ -103,16 +108,9 @@ export class GameScene extends Phaser.Scene {
       else this.dragInput.attachUnit(u);
     });
 
-    // arrow collisions
-    this.physics.add.overlap(this.arrows, this.units, (a, u) => {
-      this.handleArrowHit(a as Arrow, u as Unit);
-    });
-    this.physics.add.collider(this.arrows, this.obstacles, (a) => {
-      (a as Arrow).destroy();
-    });
-    this.physics.world.on("worldbounds", (body: Phaser.Physics.Arcade.Body) => {
-      if (body.gameObject instanceof Arrow) body.gameObject.destroy();
-    });
+    // Arrows are now ballistic Containers stepped manually in update().
+    // No Phaser overlaps/colliders — they fly OVER obstacles and only hit
+    // units when their height drops into the strike zone (handled in update).
 
     // launch HUD overlay
     this.scene.launch("HUDScene", { turnManager: this.turnManager });
@@ -128,11 +126,10 @@ export class GameScene extends Phaser.Scene {
       turnManager: this.turnManager,
       units: this.units,
       obstacles: this.obstacles,
-      arrows: this.arrows,
-      spawnArrow: (x, y, vx, vy, team) => {
+      spawnArrow: (x, y, vx, vy, vh, team) => {
         const arrow = new Arrow(this, x, y);
-        this.arrows.add(arrow);
-        arrow.launch(vx, vy, team);
+        this.arrows.push(arrow);
+        arrow.launch(vx, vy, vh, team);
         sounds.playArrowShoot();
         return arrow;
       },
@@ -207,13 +204,8 @@ export class GameScene extends Phaser.Scene {
     // every other unit. Catches tunneling when displacement-per-frame exceeds
     // the defender's diameter (frame spikes, browser throttling, etc).
     this.sweepTestCCD();
-    // Clean up arrows once friction has slowed them past the threshold.
-    this.arrows.getChildren().forEach((obj) => {
-      const arrow = obj as Arrow;
-      if (!arrow.active) return;
-      const body = arrow.body as Phaser.Physics.Arcade.Body;
-      if (body.speed < ARROW_REST_SPEED) arrow.destroy();
-    });
+    // Step arrows + check collisions manually (they're not Phaser bodies).
+    this.stepArrows(dt);
     this.turnManager?.tick();
   }
 
@@ -358,40 +350,66 @@ export class GameScene extends Phaser.Scene {
       const len = Math.hypot(vx, vy) || 1;
       const ox = unit.x + (vx / len) * (unit.radius + 6);
       const oy = unit.y + (vy / len) * (unit.radius + 6);
+      // Map the drag-charge (already encoded in |v|) to the initial upward
+      // velocity vh. Heavier charges fly faster AND in a higher arc.
+      const t = Phaser.Math.Clamp(
+        (len - ARROW_HSPEED_MIN) / (ARROW_HSPEED_MAX - ARROW_HSPEED_MIN),
+        0,
+        1,
+      );
+      const vh = Phaser.Math.Linear(ARROW_VH_MIN, ARROW_VH_MAX, t);
       const arrow = new Arrow(this, ox, oy);
-      this.arrows.add(arrow);
-      arrow.launch(vx, vy, unit.team);
+      this.arrows.push(arrow);
+      arrow.launch(vx, vy, vh, unit.team);
       sounds.playArrowShoot();
     }
     this.turnManager.consumeAP();
   }
 
-  private handleArrowHit(arrow: Arrow, unit: Unit): void {
-    if (!arrow.active || !unit.active) return;
-    if (unit.team === arrow.ownerTeam) {
-      // friendly block — no damage, arrow consumed
-      arrow.destroy();
-      return;
+  /**
+   * Advance all ballistic arrows by `dt`, then check each one against the
+   * unit roster for ground-overlap-at-low-height. Arrows fly over high
+   * obstacles and over units that are temporarily out of strike range.
+   */
+  private stepArrows(dt: number): void {
+    for (const arrow of this.arrows) {
+      if (!arrow.active) continue;
+      arrow.step(dt);
+      if (!arrow.active) continue;
+      // Arrows only hit when low enough to be at unit-strike height.
+      if (arrow.height >= ARROW_HIT_HEIGHT) continue;
+      for (const obj of this.units.getChildren()) {
+        const unit = obj as Unit;
+        if (!unit.active || !unit.isAlive()) continue;
+        const dist = Phaser.Math.Distance.Between(arrow.x, arrow.y, unit.x, unit.y);
+        if (dist >= unit.radius + arrow.hitRadius) continue;
+        // Hit!
+        if (unit.team === arrow.ownerTeam) {
+          arrow.destroy();
+          break;
+        }
+        // Direction the arrow is coming from = opposite of its horizontal velocity.
+        const multiplier = directionalMultiplier(
+          unit.x - arrow.vx,
+          unit.y - arrow.vy,
+          unit.x,
+          unit.y,
+          unit.facingAngle,
+        );
+        const baseDamage = DAMAGE_MATRIX.archer[unit.unitType];
+        const damage = Math.max(1, Math.round(baseDamage * multiplier));
+        const killed = unit.takeDamage(damage);
+        const tintColor = multiplier >= 2.5 ? 0xff4d3d : multiplier >= 1.5 ? 0xffa733 : 0xf1715f;
+        this.spawnImpactPuff(arrow.x, arrow.y, tintColor);
+        sounds.playArrowHit();
+        spawnDamagePopup(this, unit.x, unit.y - unit.radius, damage, multiplier);
+        arrow.destroy();
+        if (killed) unit.destroyUnit();
+        break;
+      }
     }
-    // Direction the arrow is coming from = opposite of its velocity.
-    const ab = arrow.body as Phaser.Physics.Arcade.Body;
-    const pseudoAttackerX = unit.x - ab.velocity.x;
-    const pseudoAttackerY = unit.y - ab.velocity.y;
-    const multiplier = directionalMultiplier(
-      pseudoAttackerX,
-      pseudoAttackerY,
-      unit.x,
-      unit.y,
-      unit.facingAngle,
-    );
-    const baseDamage = DAMAGE_MATRIX.archer[unit.unitType];
-    const damage = Math.max(1, Math.round(baseDamage * multiplier));
-    const killed = unit.takeDamage(damage);
-    this.spawnImpactPuff(arrow.x, arrow.y, multiplier >= 2.5 ? 0xff4d3d : multiplier >= 1.5 ? 0xffa733 : 0xf1715f);
-    sounds.playArrowHit();
-    spawnDamagePopup(this, unit.x, unit.y - unit.radius, damage, multiplier);
-    arrow.destroy();
-    if (killed) unit.destroyUnit();
+    // Remove destroyed arrows from the active list.
+    this.arrows = this.arrows.filter((a) => a.active);
   }
 
   private spawnImpactPuff(x: number, y: number, color: number = 0xf1e9d2): void {

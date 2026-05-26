@@ -119,7 +119,7 @@ export class CombatResolver {
       other.knockedBack = true;
       other.hasHitThisSlide = false;
       other.lastHitBy = knocked.id;
-      other.setFacingFromVelocity(nx * kbSpeed, ny * kbSpeed);
+      // Facing is NOT updated — chained-knockback units keep their facing.
     }
 
     // Push apart so the next-frame CCD doesn't re-fire on this pair.
@@ -214,7 +214,8 @@ export class CombatResolver {
       defender.knockedBack = true;
       defender.hasHitThisSlide = false;
       defender.lastHitBy = attacker.id;
-      defender.setFacingFromVelocity(nx * kbSpeed, ny * kbSpeed);
+      // Facing is NOT updated — a knocked-back unit keeps the direction it
+      // was facing before the hit (and through wall bounces).
       // Physically separate so the next-frame CCD doesn't re-fire on this pair.
       // Clamp inside world bounds so the defender can't be punched past the border.
       const sumRadii = attacker.radius + defender.radius;

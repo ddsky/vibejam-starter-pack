@@ -10,10 +10,24 @@ export const MIN_LAUNCH_SPEED = 140;
 export const FRICTION = 700;
 export const REST_SPEED = 8;
 
-export const ARROW_MIN_SPEED = 380;
-export const ARROW_MAX_SPEED = 1300;
-export const ARROW_FRICTION = 360;
-export const ARROW_REST_SPEED = 50;
+/**
+ * Arc-flight arrow constants. Arrows are ballistic now:
+ *   x, y advance at (vx, vy)  ← horizontal velocity, constant
+ *   height advances at vh, vh decreases by ARROW_GRAVITY each second
+ *
+ * Charge maps to both horizontal speed and initial vertical (vh) velocity,
+ * so heavier charges fly faster, further, and higher.
+ */
+export const ARROW_HSPEED_MIN = 320;
+export const ARROW_HSPEED_MAX = 900;
+export const ARROW_VH_MIN = 220;
+export const ARROW_VH_MAX = 620;
+export const ARROW_GRAVITY = 1100;
+/** Arrow can only hit a unit when its height drops below this. */
+export const ARROW_HIT_HEIGHT = 38;
+// Aliases used by ArcherInput to map drag-charge to horizontal launch speed.
+export const ARROW_MIN_SPEED = ARROW_HSPEED_MIN;
+export const ARROW_MAX_SPEED = ARROW_HSPEED_MAX;
 /** Legacy alias retained for any old references. */
 export const ARROW_SPEED = ARROW_MAX_SPEED;
 export const ARROW_LENGTH = 26;

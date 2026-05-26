@@ -20,6 +20,7 @@ export class BootScene extends Phaser.Scene {
     this.generateBowIcon("icon-archer");
     this.generateShieldIcon("icon-knight");
     this.generateArrowTexture("arrow-projectile");
+    this.generateArrowShadow("arrow-shadow");
     this.generateObstacleTexture("obstacle");
     this.generateArcherShootOverlay("archer-shoot-overlay");
 
@@ -171,6 +172,16 @@ export class BootScene extends Phaser.Scene {
     g.fillStyle(0xc4452d, 1);
     g.fillTriangle(0, ARROW_LENGTH / 2 - ARROW_THICKNESS - 1, 0, ARROW_LENGTH / 2 + ARROW_THICKNESS + 1, 5, ARROW_LENGTH / 2);
     g.generateTexture(key, ARROW_LENGTH, ARROW_LENGTH);
+    g.destroy();
+  }
+
+  private generateArrowShadow(key: string): void {
+    const w = 18;
+    const h = 8;
+    const g = this.make.graphics({ x: 0, y: 0 }, false);
+    g.fillStyle(0x000000, 0.6);
+    g.fillEllipse(w / 2, h / 2, w, h);
+    g.generateTexture(key, w, h);
     g.destroy();
   }
 

@@ -6,9 +6,11 @@ import type { TurnManager } from "./TurnManager";
 import { DAMAGE_MATRIX, UNIT_STATS } from "../config/units";
 import {
   AI_ACTION_PACING_MS,
-  ARROW_FRICTION,
-  ARROW_MAX_SPEED,
-  ARROW_MIN_SPEED,
+  ARROW_HSPEED_MIN,
+  ARROW_HSPEED_MAX,
+  ARROW_VH_MIN,
+  ARROW_VH_MAX,
+  ARROW_GRAVITY,
   FRICTION,
   MAX_LAUNCH_SPEED,
   MIN_LAUNCH_SPEED,
@@ -20,8 +22,14 @@ export interface AIDeps {
   turnManager: TurnManager;
   units: Phaser.Physics.Arcade.Group;
   obstacles: Phaser.Physics.Arcade.StaticGroup;
-  arrows: Phaser.Physics.Arcade.Group;
-  spawnArrow: (x: number, y: number, vx: number, vy: number, team: "ai") => Arrow;
+  spawnArrow: (
+    x: number,
+    y: number,
+    vx: number,
+    vy: number,
+    vh: number,
+    team: "ai",
+  ) => Arrow;
 }
 
 type MeleeAction = {
@@ -38,6 +46,7 @@ type RangedAction = {
   target: Unit;
   vx: number;
   vy: number;
+  vh: number;
   score: number;
 };
 type MoveAction = {
@@ -169,12 +178,23 @@ export class AIController {
     const dy = target.y - attacker.y;
     const dist = Math.hypot(dx, dy);
     if (dist < 1) return null;
-    if (!hasClearPath(attacker.x, attacker.y, target.x, target.y, all, obstacles, [attacker, target], target.radius)) return null;
+    // Arrows now fly OVER obstacles, so we no longer require a clear ground path.
+    // We DO still want to avoid hitting our own units, so check for friendly
+    // archers/etc. on the line as a coarse heuristic.
+    if (!hasClearOfFriendlies(attacker, target, all)) return null;
 
-    // pick arrow speed that just reaches target (with a small buffer)
-    const neededSpeed = Math.sqrt(2 * ARROW_FRICTION * dist) * 1.18;
-    if (neededSpeed > ARROW_MAX_SPEED * 1.05) return null; // out of range
-    const arrowSpeed = Phaser.Math.Clamp(neededSpeed, ARROW_MIN_SPEED, ARROW_MAX_SPEED);
+    // Choose a horizontal speed proportional to distance, then derive the
+    // vertical (vh) so the arrow's ballistic range matches `dist` exactly.
+    // Range formula:  range = hspeed × 2 × vh / gravity
+    // → vh = range × gravity / (2 × hspeed)
+    const hspeed = Phaser.Math.Clamp(
+      Math.sqrt(dist) * 22, // gentle scaling; long shots want fast arrows
+      ARROW_HSPEED_MIN,
+      ARROW_HSPEED_MAX,
+    );
+    const vh = (dist * ARROW_GRAVITY) / (2 * hspeed);
+    // Reject if the required vh is way out of bounds — target's too far/close.
+    if (vh < ARROW_VH_MIN * 0.7 || vh > ARROW_VH_MAX * 1.3) return null;
 
     const damage = DAMAGE_MATRIX.archer[target.unitType];
     const killBonus = damage >= target.hp ? 35 : 0;
@@ -184,8 +204,9 @@ export class AIController {
       kind: "ranged",
       attacker,
       target,
-      vx: (dx / dist) * arrowSpeed,
-      vy: (dy / dist) * arrowSpeed,
+      vx: (dx / dist) * hspeed,
+      vy: (dy / dist) * hspeed,
+      vh: Phaser.Math.Clamp(vh, ARROW_VH_MIN, ARROW_VH_MAX),
       score,
     };
   }
@@ -234,7 +255,7 @@ export class AIController {
       const len = v.length() || 1;
       const ox = u.x + (v.x / len) * (u.radius + 6);
       const oy = u.y + (v.y / len) * (u.radius + 6);
-      this.deps.spawnArrow(ox, oy, v.x, v.y, "ai");
+      this.deps.spawnArrow(ox, oy, v.x, v.y, action.vh, "ai");
     } else {
       launchUnit(action.attacker, v.x, v.y);
     }
@@ -249,6 +270,27 @@ function neededSlideSpeed(dist: number): number | null {
   if (raw < MIN_LAUNCH_SPEED) return MIN_LAUNCH_SPEED;
   if (raw > MAX_LAUNCH_SPEED) return raw < MAX_LAUNCH_SPEED * 1.4 ? MAX_LAUNCH_SPEED : null;
   return raw;
+}
+
+/**
+ * Coarse "don't shoot through a friendly" check — used for ranged actions
+ * only. Obstacles are ignored (arrows arc over them now). Only blocks if a
+ * friendly unit's body is within sumRadii of the line between attacker and
+ * target AND is between them.
+ */
+function hasClearOfFriendlies(attacker: Unit, target: Unit, units: Unit[]): boolean {
+  const line = new Phaser.Geom.Line(attacker.x, attacker.y, target.x, target.y);
+  const targetDist = Phaser.Math.Distance.Between(attacker.x, attacker.y, target.x, target.y);
+  for (const u of units) {
+    if (u === attacker || u === target) continue;
+    if (!u.isAlive()) continue;
+    if (u.team !== attacker.team) continue; // enemies in the line of fire are fine
+    const distToAttacker = Phaser.Math.Distance.Between(attacker.x, attacker.y, u.x, u.y);
+    if (distToAttacker >= targetDist - target.radius) continue;
+    const circle = new Phaser.Geom.Circle(u.x, u.y, u.radius + 2);
+    if (Phaser.Geom.Intersects.LineToCircle(line, circle)) return false;
+  }
+  return true;
 }
 
 function hasClearPath(
