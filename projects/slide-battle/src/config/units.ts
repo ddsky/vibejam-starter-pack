@@ -1,5 +1,6 @@
 export type UnitType = "swordsman" | "archer" | "knight";
 export type Team = "player" | "ai";
+export type GameMode = "ai" | "pvp";
 
 export interface UnitStats {
   hp: number;

@@ -28,13 +28,24 @@ export class MainMenuScene extends Phaser.Scene {
       .setOrigin(0.5);
 
     new Button(this, width / 2, height / 2 + 20, "Play vs AI", () => {
-      this.scene.start("GameScene");
+      this.scene.start("GameScene", { mode: "ai" });
     });
 
     new Button(
       this,
       width / 2,
-      height / 2 + 110,
+      height / 2 + 105,
+      "Play Local PvP",
+      () => {
+        this.scene.start("GameScene", { mode: "pvp" });
+      },
+      { bgColor: 0xc4452d, hoverColor: 0xd9573e },
+    );
+
+    new Button(
+      this,
+      width / 2,
+      height / 2 + 190,
       "Quit",
       () => {
         window.close();

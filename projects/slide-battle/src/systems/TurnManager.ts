@@ -85,7 +85,7 @@ export class TurnManager extends Phaser.Events.EventEmitter {
   giveUp(): void {
     if (this.gameOver) return;
     this.gameOver = true;
-    this.winner = this.currentTeam === "player" ? "ai" : "ai";
+    this.winner = this.currentTeam === "player" ? "ai" : "player";
     this.emit("game-over", this.winner);
   }
 

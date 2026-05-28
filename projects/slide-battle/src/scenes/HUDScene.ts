@@ -1,5 +1,5 @@
 import Phaser from "phaser";
-import type { Team } from "../config/units";
+import type { Team, GameMode } from "../config/units";
 import { TEAM_COLORS } from "../config/units";
 import type { TurnManager } from "../systems/TurnManager";
 import { Button } from "../ui/Button";
@@ -7,12 +7,14 @@ import { sounds } from "../audio/SoundManager";
 
 export interface HUDInit {
   turnManager: TurnManager;
+  mode?: GameMode;
 }
 
 export class HUDScene extends Phaser.Scene {
   private turnManager!: TurnManager;
   private apIcons: Phaser.GameObjects.Arc[] = [];
   private turnLabel!: Phaser.GameObjects.Text;
+  private mode: GameMode = "ai";
 
   constructor() {
     super("HUDScene");
@@ -20,6 +22,7 @@ export class HUDScene extends Phaser.Scene {
 
   create(data: HUDInit): void {
     this.turnManager = data.turnManager;
+    this.mode = data.mode ?? "ai";
     const { width } = this.scale;
 
     // top center panel
@@ -88,10 +91,15 @@ export class HUDScene extends Phaser.Scene {
   }
 
   private refreshTurn(team: Team): void {
-    const isPlayer = team === "player";
-    this.turnLabel.setText(isPlayer ? "Your Turn" : "AI Turn");
-    this.turnLabel.setColor(isPlayer ? "#7ee787" : "#f1715f");
-    void TEAM_COLORS; // referenced for future expansion
+    const isBlue = team === "player";
+    if (this.mode === "pvp") {
+      this.turnLabel.setText(isBlue ? "Blue's Turn" : "Red's Turn");
+      const hex = "#" + TEAM_COLORS[team].toString(16).padStart(6, "0");
+      this.turnLabel.setColor(hex);
+    } else {
+      this.turnLabel.setText(isBlue ? "Your Turn" : "AI Turn");
+      this.turnLabel.setColor(isBlue ? "#7ee787" : "#f1715f");
+    }
   }
 
   private handleGiveUp(): void {

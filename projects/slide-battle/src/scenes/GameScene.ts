@@ -26,7 +26,7 @@ import { KnightCurve } from "../systems/KnightCurve";
 import { CombatResolver, directionalMultiplier } from "../systems/CombatResolver";
 import { TurnManager } from "../systems/TurnManager";
 import { AIController } from "../systems/AIController";
-import { DAMAGE_MATRIX, type Team } from "../config/units";
+import { DAMAGE_MATRIX, type Team, type GameMode } from "../config/units";
 import { Arrow } from "../objects/Arrow";
 import { sounds } from "../audio/SoundManager";
 import { spawnDamagePopup } from "../ui/DamagePopup";
@@ -40,13 +40,15 @@ export class GameScene extends Phaser.Scene {
   knightCurve!: KnightCurve;
   combat!: CombatResolver;
   turnManager!: TurnManager;
-  ai!: AIController;
+  ai?: AIController;
+  mode: GameMode = "ai";
 
   constructor() {
     super("GameScene");
   }
 
-  create(): void {
+  create(data?: { mode?: GameMode }): void {
+    this.mode = data?.mode ?? "ai";
     // World physics bounds = inner playfield. Margin around the playfield is
     // out-of-bounds for units but available for the cursor to drag into.
     this.physics.world.setBounds(PLAYFIELD_LEFT, PLAYFIELD_TOP, PLAYFIELD_WIDTH, PLAYFIELD_HEIGHT);
@@ -113,27 +115,29 @@ export class GameScene extends Phaser.Scene {
     // units when their height drops into the strike zone (handled in update).
 
     // launch HUD overlay
-    this.scene.launch("HUDScene", { turnManager: this.turnManager });
+    this.scene.launch("HUDScene", { turnManager: this.turnManager, mode: this.mode });
     sounds.startMusic();
 
     // game over flow
     this.turnManager.on("game-over", (winner: Team) => {
-      this.scene.launch("GameOverScene", { winner });
+      this.scene.launch("GameOverScene", { winner, mode: this.mode });
     });
 
-    this.ai = new AIController({
-      scene: this,
-      turnManager: this.turnManager,
-      units: this.units,
-      obstacles: this.obstacles,
-      spawnArrow: (x, y, vx, vy, vh, team) => {
-        const arrow = new Arrow(this, x, y);
-        this.arrows.push(arrow);
-        arrow.launch(vx, vy, vh, team);
-        sounds.playArrowShoot();
-        return arrow;
-      },
-    });
+    if (this.mode === "ai") {
+      this.ai = new AIController({
+        scene: this,
+        turnManager: this.turnManager,
+        units: this.units,
+        obstacles: this.obstacles,
+        spawnArrow: (x, y, vx, vy, vh, team) => {
+          const arrow = new Arrow(this, x, y);
+          this.arrows.push(arrow);
+          arrow.launch(vx, vy, vh, team);
+          sounds.playArrowShoot();
+          return arrow;
+        },
+      });
+    }
 
     // Predictive CCD runs before physics integrates. Catches tunneling at
     // very high velocities or during frame spikes by snapping the attacker
@@ -327,7 +331,7 @@ export class GameScene extends Phaser.Scene {
 
   private canDragUnit(unit: Unit): boolean {
     if (!this.turnManager.canAct(unit.team)) return false;
-    if (unit.team !== "player") return false;
+    if (this.mode === "ai" && unit.team !== "player") return false;
     if (this.knightCurve?.isActive()) return false;
     return true;
   }
