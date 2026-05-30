@@ -70,9 +70,9 @@ export class GameScene extends Phaser.Scene {
     this.obstacles = this.physics.add.staticGroup();
     this.arrows = [];
 
-    // Forests + lakes become invisible static bodies; the renderer draws the
-    // visible trees/water. Anything in `obstacles` gets unit collision (via the
-    // collider in CombatResolver.attach) and AI path-blocking for free.
+    // Terrain blockers become invisible static bodies; the renderer draws the
+    // visible trees/water. Forest bodies are circular per-tree footprints, not
+    // full terrain cells, so the collision better matches what the player sees.
     this.buildTerrainBodies();
 
     for (const spawn of UNIT_SPAWNS) {
@@ -467,15 +467,21 @@ export class GameScene extends Phaser.Scene {
   }
 
   private buildTerrainBodies(): void {
-    for (const r of this.terrain.blockedRects()) {
-      const img = this.obstacles.create(r.cx, r.cy, "obstacle") as Phaser.Physics.Arcade.Image;
+    for (const shape of this.terrain.collisionShapes()) {
+      const img = this.obstacles.create(shape.cx, shape.cy, "obstacle") as Phaser.Physics.Arcade.Image;
       img.setVisible(false);
-      img.setDisplaySize(r.w, r.h);
       const body = img.body as Phaser.Physics.Arcade.StaticBody;
-      // Static bodies keep their texture size unless explicitly resized — mirror
-      // the Obstacle class so the collision rect matches the merged terrain rect.
-      body.setSize(r.w, r.h);
-      body.updateFromGameObject();
+      if (shape.shape === "circle") {
+        const d = shape.r * 2;
+        img.setDisplaySize(d, d);
+        body.updateFromGameObject();
+        body.setCircle(shape.r, 0, 0);
+      } else {
+        img.setDisplaySize(shape.w, shape.h);
+        // Static bodies keep their texture size unless explicitly resized.
+        body.setSize(shape.w, shape.h);
+        body.updateFromGameObject();
+      }
     }
   }
 

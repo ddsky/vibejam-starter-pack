@@ -141,27 +141,13 @@ export class TerrainRenderer {
   }
 
   private renderForests(): void {
-    const t = this.terrain;
-    const rng = Phaser.Math.RND;
-    const base = (TERRAIN_CELL_W * 1.3) / 192; // tree art is 192px wide
-    for (let cy = 0; cy < t.rows; cy++) {
-      for (let cx = 0; cx < t.cols; cx++) {
-        if (t.cell(cx, cy).kind !== "forest") continue;
-        // 1-2 trees per cell with heavy jitter + scale variation so the canopy
-        // reads as an organic clump rather than a grid of identical trees.
-        const count = rng.frac() < 0.35 ? 2 : 1;
-        for (let i = 0; i < count; i++) {
-          const type = rng.between(1, 4);
-          const x = t.cellCenterX(cx) + rng.between(-18, 18);
-          const y = t.cellCenterY(cy) + rng.between(-16, 16);
-          const tree = this.scene.add.sprite(x, y, `tree-${type}`);
-          tree.setScale(base * rng.realInRange(0.8, 1.35));
-          tree.setOrigin(0.5, 0.82); // trunk near the cell, canopy overhangs upward
-          tree.setDepth(D_TREE_BASE + y * 0.01);
-          tree.play(`tree-${type}-sway`);
-          tree.anims.setProgress(rng.frac());
-        }
-      }
+    for (const spec of this.terrain.forestTrees()) {
+      const tree = this.scene.add.sprite(spec.x, spec.y, `tree-${spec.type}`);
+      tree.setScale(spec.scale);
+      tree.setOrigin(0.5, 0.82); // trunk near the cell, canopy overhangs upward
+      tree.setDepth(D_TREE_BASE + spec.y * 0.01);
+      tree.play(`tree-${spec.type}-sway`);
+      tree.anims.setProgress(spec.animProgress);
     }
   }
 }

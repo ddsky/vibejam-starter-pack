@@ -624,7 +624,24 @@ function lineHitsObstacle(
   movingRadius: number,
   safetyMargin: number,
 ): boolean {
-  const softRect = obstacleRect(obstacle, movingRadius + safetyMargin);
+  const body = obstacle.body as Phaser.Physics.Arcade.Body | Phaser.Physics.Arcade.StaticBody | null;
+  const padding = movingRadius + safetyMargin;
+
+  if (body?.isCircle) {
+    const softCircle = new Phaser.Geom.Circle(body.center.x, body.center.y, body.halfWidth + padding);
+    if (!Phaser.Geom.Intersects.LineToCircle(line, softCircle)) return false;
+
+    // A unit already beside a tree can be inside the conservative margin. Let
+    // it leave that cushion, but never let a planned path cross the real body.
+    if (circleContains(softCircle, line.x1, line.y1) && !circleContains(softCircle, line.x2, line.y2)) {
+      const hardCircle = new Phaser.Geom.Circle(body.center.x, body.center.y, body.halfWidth + movingRadius + 1);
+      return Phaser.Geom.Intersects.LineToCircle(line, hardCircle);
+    }
+
+    return true;
+  }
+
+  const softRect = obstacleRect(obstacle, padding);
   if (!Phaser.Geom.Intersects.LineToRectangle(line, softRect)) return false;
 
   // A unit already beside a wall can be inside the conservative margin. Let it
@@ -638,19 +655,36 @@ function lineHitsObstacle(
   return true;
 }
 
+function circleContains(circle: Phaser.Geom.Circle, x: number, y: number): boolean {
+  const dx = x - circle.x;
+  const dy = y - circle.y;
+  return dx * dx + dy * dy <= circle.radius * circle.radius;
+}
+
 function obstacleRect(obstacle: Obstacle, padding: number): Phaser.Geom.Rectangle {
-  const w = obstacle.displayWidth + padding * 2;
-  const h = obstacle.displayHeight + padding * 2;
-  return new Phaser.Geom.Rectangle(obstacle.x - w / 2, obstacle.y - h / 2, w, h);
+  const body = obstacle.body as Phaser.Physics.Arcade.Body | Phaser.Physics.Arcade.StaticBody | null;
+  const cx = body?.center.x ?? obstacle.x;
+  const cy = body?.center.y ?? obstacle.y;
+  const w = (body?.width ?? obstacle.displayWidth) + padding * 2;
+  const h = (body?.height ?? obstacle.displayHeight) + padding * 2;
+  return new Phaser.Geom.Rectangle(cx - w / 2, cy - h / 2, w, h);
 }
 
 function nearestObstacleClearance(x: number, y: number, obstacles: Obstacle[], radius: number): number {
   let best = Infinity;
   for (const obstacle of obstacles) {
-    const halfW = obstacle.displayWidth / 2;
-    const halfH = obstacle.displayHeight / 2;
-    const dx = Math.max(Math.abs(x - obstacle.x) - halfW, 0);
-    const dy = Math.max(Math.abs(y - obstacle.y) - halfH, 0);
+    const body = obstacle.body as Phaser.Physics.Arcade.Body | Phaser.Physics.Arcade.StaticBody | null;
+    if (body?.isCircle) {
+      best = Math.min(best, Phaser.Math.Distance.Between(x, y, body.center.x, body.center.y) - body.halfWidth - radius);
+      continue;
+    }
+
+    const cx = body?.center.x ?? obstacle.x;
+    const cy = body?.center.y ?? obstacle.y;
+    const halfW = (body?.width ?? obstacle.displayWidth) / 2;
+    const halfH = (body?.height ?? obstacle.displayHeight) / 2;
+    const dx = Math.max(Math.abs(x - cx) - halfW, 0);
+    const dy = Math.max(Math.abs(y - cy) - halfH, 0);
     best = Math.min(best, Math.hypot(dx, dy) - radius);
   }
   return best === Infinity ? 120 : best;

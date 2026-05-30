@@ -46,12 +46,33 @@ export interface BlockedRect {
   h: number;
 }
 
+/** Render/collision data for one visible forest tree. */
+export interface ForestTree {
+  x: number;
+  y: number;
+  type: number;
+  scale: number;
+  animProgress: number;
+  collisionRadius: number;
+}
+
+export type TerrainCollisionShape =
+  | { shape: "rect"; terrain: "water"; cx: number; cy: number; w: number; h: number }
+  | { shape: "circle"; terrain: "forest"; cx: number; cy: number; r: number };
+
 type Coord = [number, number];
+
+const TREE_ART_WIDTH = 192;
+const TREE_WIDTH_SCALE = 1.3;
+const TREE_COLLISION_RADIUS_RATIO = 0.21;
+const TREE_COLLISION_RADIUS_MIN = 12;
+const TREE_COLLISION_RADIUS_MAX = 22;
 
 /**
  * Procedural natural battlefield. A grid of cells over the playfield, each
  * grass / forest / water / hill with an integer elevation. Forest + water are
- * non-traversable (the scene turns them into static collision bodies); hills
+ * non-traversable at the pathfinding layer; the scene turns water cells into
+ * static rectangles and visible forest trees into circular static bodies. Hills
  * are traversable but carry elevation, which the friction loop and the combat
  * resolver read via {@link elevationAt}.
  *
@@ -64,6 +85,7 @@ export class Terrain {
   readonly cells: TerrainCell[]; // row-major, length cols*rows
 
   private rng: Phaser.Math.RandomDataGenerator;
+  private forestTreeCache: ForestTree[] | null = null;
 
   constructor(rng: Phaser.Math.RandomDataGenerator) {
     this.rng = rng;
@@ -123,11 +145,9 @@ export class Terrain {
   }
 
   /**
-   * Can a unit's center sit at this cell without its body overlapping a solid
-   * obstacle? Forest/water cells are whole-cell bodies and a unit is wider than
-   * one cell, so any solid within `clearanceCells` (Chebyshev) rules the cell
-   * out. This is the configuration-space erosion that keeps the AI from routing
-   * through gaps a unit physically can't fit through.
+   * Can a unit's center sit at this cell without being too close to terrain?
+   * The AI still treats forest/water as blocked terrain regions, then precise
+   * obstacle shapes get a final line-clearance check before any slide.
    */
   private isNavigable(cx: number, cy: number, clearanceCells: number): boolean {
     if (this.solid(cx, cy) || !this.inBounds(cx, cy)) return false;
@@ -272,7 +292,67 @@ export class Terrain {
     }
   }
 
-  // --- collision rects -------------------------------------------------------
+  // --- collision shapes ------------------------------------------------------
+
+  /**
+   * Visible forest trees. Collision uses these exact placements, so a unit
+   * no longer hits an invisible full-cell forest rectangle around sparse trees.
+   */
+  forestTrees(): readonly ForestTree[] {
+    if (this.forestTreeCache) return this.forestTreeCache;
+
+    const trees: ForestTree[] = [];
+    const baseScale = (TERRAIN_CELL_W * TREE_WIDTH_SCALE) / TREE_ART_WIDTH;
+    for (let cy = 0; cy < this.rows; cy++) {
+      for (let cx = 0; cx < this.cols; cx++) {
+        if (this.cell(cx, cy).kind !== "forest") continue;
+        const count = this.rng.frac() < 0.35 ? 2 : 1;
+        for (let i = 0; i < count; i++) {
+          const type = this.rng.between(1, 4);
+          const x = this.cellCenterX(cx) + this.rng.between(-18, 18);
+          const y = this.cellCenterY(cy) + this.rng.between(-16, 16);
+          const scale = baseScale * this.rng.realInRange(0.8, 1.35);
+          const visualWidth = TREE_ART_WIDTH * scale;
+          trees.push({
+            x,
+            y,
+            type,
+            scale,
+            animProgress: this.rng.frac(),
+            collisionRadius: Phaser.Math.Clamp(
+              visualWidth * TREE_COLLISION_RADIUS_RATIO,
+              TREE_COLLISION_RADIUS_MIN,
+              TREE_COLLISION_RADIUS_MAX,
+            ),
+          });
+        }
+      }
+    }
+
+    this.forestTreeCache = trees;
+    return trees;
+  }
+
+  /**
+   * Physics shapes for terrain blockers. Water remains broad rect coverage;
+   * forests are per-tree circular footprints that match the rendered trees.
+   */
+  collisionShapes(): TerrainCollisionShape[] {
+    return [
+      ...this.rectsFor((cx, cy) => this.cell(cx, cy).kind === "water").map((r) => ({
+        shape: "rect" as const,
+        terrain: "water" as const,
+        ...r,
+      })),
+      ...this.forestTrees().map((tree) => ({
+        shape: "circle" as const,
+        terrain: "forest" as const,
+        cx: tree.x,
+        cy: tree.y,
+        r: tree.collisionRadius,
+      })),
+    ];
+  }
 
   /**
    * Merge contiguous blocked cells per row into rectangles. Row-runs avoid the
@@ -280,11 +360,15 @@ export class Terrain {
    * the remaining vertical seams run perpendicular to typical slide direction.
    */
   blockedRects(): BlockedRect[] {
+    return this.rectsFor((cx, cy) => this.isBlocked(cx, cy));
+  }
+
+  private rectsFor(inside: (cx: number, cy: number) => boolean): BlockedRect[] {
     const rects: BlockedRect[] = [];
     for (let cy = 0; cy < this.rows; cy++) {
       let runStart = -1;
       for (let cx = 0; cx <= this.cols; cx++) {
-        const blocked = cx < this.cols && this.isBlocked(cx, cy);
+        const blocked = cx < this.cols && inside(cx, cy);
         if (blocked && runStart < 0) {
           runStart = cx;
         } else if (!blocked && runStart >= 0) {
