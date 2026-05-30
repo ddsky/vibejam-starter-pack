@@ -3,6 +3,8 @@ import type { Unit } from "../objects/Unit";
 import type { Obstacle } from "../objects/Obstacle";
 import type { Arrow } from "../objects/Arrow";
 import type { TurnManager } from "./TurnManager";
+import type { Terrain } from "./Terrain";
+import { TERRAIN_CELL_W } from "../config/balance";
 import { DAMAGE_MATRIX, UNIT_STATS } from "../config/units";
 import {
   AI_ACTION_PACING_MS,
@@ -30,6 +32,7 @@ export interface AIDeps {
   turnManager: TurnManager;
   units: Phaser.Physics.Arcade.Group;
   obstacles: Phaser.Physics.Arcade.StaticGroup;
+  terrain: Terrain;
   spawnArrow: (
     x: number,
     y: number,
@@ -239,7 +242,6 @@ export class AIController {
           const currentDist = Phaser.Math.Distance.Between(attacker.x, attacker.y, target.x, target.y);
           if (currentDist < 1) continue;
 
-          const targetAngle = Math.atan2(target.y - attacker.y, target.x - attacker.x);
           const directLaneOpen = hasClearPath(
             attacker.x,
             attacker.y,
@@ -251,6 +253,19 @@ export class AIController {
             target.radius,
             attacker.radius,
           );
+
+          // Geodesic distance field to the target — lets a walled-off unit make
+          // real progress by routing around terrain instead of pressing into it.
+          // Eroded by 1 cell so it only routes where a unit's body actually fits.
+          const field = this.deps.terrain.distanceFieldFrom(target.x, target.y, 1);
+          const startGeo = this.deps.terrain.fieldAt(field, attacker.x, attacker.y);
+          // Aim moves along the navigable route (next waypoint around any wall),
+          // not the straight line to the target — otherwise the sampler explores
+          // the wrong cone and a boxed-in unit finds no progress move.
+          const waypoint = this.deps.terrain.flowLookahead(field, attacker.x, attacker.y, 4);
+          const aimX = waypoint ? waypoint.x : target.x;
+          const aimY = waypoint ? waypoint.y : target.y;
+          const targetAngle = Math.atan2(aimY - attacker.y, aimX - attacker.x);
 
           for (const angleOffsetDeg of POSITIONING_ANGLE_OFFSETS_DEG) {
             const angle = targetAngle + Phaser.Math.DegToRad(angleOffsetDeg);
@@ -268,6 +283,8 @@ export class AIController {
                 allUnits,
                 obstacles,
                 Math.abs(angleOffsetDeg),
+                field,
+                startGeo,
               );
               if (candidate && (!best || candidate.score > best.score)) best = candidate;
             }
@@ -291,6 +308,8 @@ export class AIController {
     allUnits: Unit[],
     obstacles: Obstacle[],
     angleOffsetDeg: number,
+    field: number[],
+    startGeo: number,
   ): MoveAction | null {
     const speed = Math.hypot(vx, vy);
     if (speed < 1) return null;
@@ -305,7 +324,6 @@ export class AIController {
     }
 
     const endDist = Phaser.Math.Distance.Between(endX, endY, target.x, target.y);
-    const progress = currentDist - endDist;
     const laneAfterMove = hasClearPath(
       endX,
       endY,
@@ -318,6 +336,13 @@ export class AIController {
       attacker.radius,
     );
 
+    // Prefer geodesic progress (routes around walls) when the field reaches both
+    // ends; fall back to straight-line distance if either cell is unreachable.
+    const endGeo = this.deps.terrain.fieldAt(field, endX, endY);
+    const geoValid = Number.isFinite(startGeo) && Number.isFinite(endGeo);
+    const progress = geoValid ? (startGeo - endGeo) * TERRAIN_CELL_W : currentDist - endDist;
+    const proximity = geoValid ? endGeo * TERRAIN_CELL_W : endDist;
+
     if (!laneAfterMove && progress < 24 && directLaneOpen) return null;
     if (progress < -55 && !laneAfterMove) return null;
 
@@ -327,7 +352,7 @@ export class AIController {
     const roleBonus = attacker.unitType === "knight" ? 2 : attacker.unitType === "swordsman" ? 1 : 0;
     const score =
       progress * 0.12 -
-      endDist * 0.006 -
+      proximity * 0.006 -
       angleOffsetDeg * 0.035 +
       clearanceScore +
       laneBonus +
@@ -429,8 +454,22 @@ function hasClearPath(
     const circle = new Phaser.Geom.Circle(u.x, u.y, u.radius + movingRadius + 4);
     if (Phaser.Geom.Intersects.LineToCircle(line, circle)) return false;
   }
-  for (const o of obstacles) {
-    if (lineHitsObstacle(line, o, movingRadius, AI_OBSTACLE_CLEARANCE)) return false;
+  // Obstacles are only tested along the segment the mover actually slides
+  // through — i.e. up to the contact point, where its center stops
+  // (targetRadius + movingRadius) from the target center. The region around a
+  // wall-hugging target lies past that point and isn't traversed, so it must
+  // not veto the move (square-corner rect inflation would otherwise engulf an
+  // adjacent attacker standing on clear ground next to a wall).
+  const contact = targetRadius > 0 ? targetRadius + movingRadius : 0;
+  const travel = targetDist - contact;
+  if (travel > 1) {
+    const travelLine =
+      contact > 0
+        ? new Phaser.Geom.Line(x1, y1, x1 + ((x2 - x1) / targetDist) * travel, y1 + ((y2 - y1) / targetDist) * travel)
+        : line;
+    for (const o of obstacles) {
+      if (lineHitsObstacle(travelLine, o, movingRadius, AI_OBSTACLE_CLEARANCE)) return false;
+    }
   }
   return true;
 }

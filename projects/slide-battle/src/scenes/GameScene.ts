@@ -1,7 +1,8 @@
 import Phaser from "phaser";
 import { Unit } from "../objects/Unit";
-import { Obstacle } from "../objects/Obstacle";
-import { UNIT_SPAWNS, OBSTACLE_SPAWNS } from "../config/layout";
+import { UNIT_SPAWNS } from "../config/layout";
+import { Terrain } from "../systems/Terrain";
+import { TerrainRenderer, TERRAIN_DEPTH_BG, TERRAIN_DEPTH_FG } from "../systems/TerrainRenderer";
 import {
   FIELD_WIDTH,
   FIELD_HEIGHT,
@@ -19,11 +20,16 @@ import {
   PLAYFIELD_BOTTOM,
   PLAYFIELD_WIDTH,
   PLAYFIELD_HEIGHT,
+  HILL_FRICTION_COEFF,
+  HILL_FRICTION_MIN,
+  HILL_FRICTION_MAX,
+  HILL_SLOPE_LOOKAHEAD,
+  ELEVATION_DAMAGE_BONUS,
 } from "../config/balance";
 import { DragInput, launchUnit } from "../systems/DragInput";
 import { ArcherInput, type ArcherMode } from "../systems/ArcherInput";
 import { KnightCurve } from "../systems/KnightCurve";
-import { CombatResolver, directionalMultiplier } from "../systems/CombatResolver";
+import { CombatResolver, directionalMultiplier, elevationMultiplier } from "../systems/CombatResolver";
 import { TurnManager } from "../systems/TurnManager";
 import { AIController } from "../systems/AIController";
 import { DAMAGE_MATRIX, type Team, type GameMode } from "../config/units";
@@ -42,6 +48,7 @@ export class GameScene extends Phaser.Scene {
   turnManager!: TurnManager;
   ai?: AIController;
   mode: GameMode = "ai";
+  terrain!: Terrain;
 
   constructor() {
     super("GameScene");
@@ -52,16 +59,21 @@ export class GameScene extends Phaser.Scene {
     // World physics bounds = inner playfield. Margin around the playfield is
     // out-of-bounds for units but available for the cursor to drag into.
     this.physics.world.setBounds(PLAYFIELD_LEFT, PLAYFIELD_TOP, PLAYFIELD_WIDTH, PLAYFIELD_HEIGHT);
-    this.drawField();
+
+    // Fresh random battlefield every time create() runs (new match / Randomize).
+    this.terrain = new Terrain(Phaser.Math.RND);
+    this.drawFieldBackground();
+    new TerrainRenderer(this, this.terrain).render();
+    this.drawFieldForeground();
 
     this.units = this.physics.add.group({ classType: Unit, runChildUpdate: true });
     this.obstacles = this.physics.add.staticGroup();
     this.arrows = [];
 
-    for (const spawn of OBSTACLE_SPAWNS) {
-      const o = new Obstacle(this, spawn.x, spawn.y, spawn.width, spawn.height);
-      this.obstacles.add(o);
-    }
+    // Forests + lakes become invisible static bodies; the renderer draws the
+    // visible trees/water. Anything in `obstacles` gets unit collision (via the
+    // collider in CombatResolver.attach) and AI path-blocking for free.
+    this.buildTerrainBodies();
 
     for (const spawn of UNIT_SPAWNS) {
       const u = new Unit(this, spawn.x, spawn.y, spawn.team, spawn.type);
@@ -84,6 +96,7 @@ export class GameScene extends Phaser.Scene {
       },
     });
     this.combat.attach(this.units, this.obstacles);
+    this.combat.setTerrain(this.terrain);
 
     this.turnManager = new TurnManager(this, this.units);
 
@@ -129,10 +142,11 @@ export class GameScene extends Phaser.Scene {
         turnManager: this.turnManager,
         units: this.units,
         obstacles: this.obstacles,
+        terrain: this.terrain,
         spawnArrow: (x, y, vx, vy, vh, team) => {
           const arrow = new Arrow(this, x, y);
           this.arrows.push(arrow);
-          arrow.launch(vx, vy, vh, team);
+          arrow.launch(vx, vy, vh, team, this.terrain.elevationAt(x, y));
           sounds.playArrowShoot();
           return arrow;
         },
@@ -177,9 +191,25 @@ export class GameScene extends Phaser.Scene {
       // causes diagonal slides to curve toward the dominant axis as the
       // smaller component hits 0 first. Here we scale velocity uniformly so
       // the trajectory stays a clean straight line.
+      //
+      // The drag is further scaled by the hill slope along the travel
+      // direction: climbing (slope > 0) increases friction so the slide stops
+      // sooner; descending (slope < 0) reduces it so the unit slides farther.
       const speed = body.velocity.length();
       if (speed > 0) {
-        const newSpeed = Math.max(0, speed - FRICTION * dt);
+        const ux = body.velocity.x / speed;
+        const uy = body.velocity.y / speed;
+        const eHere = this.terrain.elevationAt(u.x, u.y);
+        const eAhead = this.terrain.elevationAt(
+          u.x + ux * HILL_SLOPE_LOOKAHEAD,
+          u.y + uy * HILL_SLOPE_LOOKAHEAD,
+        );
+        const frictionScale = Phaser.Math.Clamp(
+          1 + (eAhead - eHere) * HILL_FRICTION_COEFF,
+          HILL_FRICTION_MIN,
+          HILL_FRICTION_MAX,
+        );
+        const newSpeed = Math.max(0, speed - FRICTION * frictionScale * dt);
         if (newSpeed <= 0) {
           body.velocity.set(0, 0);
         } else {
@@ -364,7 +394,7 @@ export class GameScene extends Phaser.Scene {
       const vh = Phaser.Math.Linear(ARROW_VH_MIN, ARROW_VH_MAX, t);
       const arrow = new Arrow(this, ox, oy);
       this.arrows.push(arrow);
-      arrow.launch(vx, vy, vh, unit.team);
+      arrow.launch(vx, vy, vh, unit.team, this.terrain.elevationAt(unit.x, unit.y));
       sounds.playArrowShoot();
     }
     this.turnManager.consumeAP();
@@ -400,8 +430,13 @@ export class GameScene extends Phaser.Scene {
           unit.y,
           unit.facingAngle,
         );
+        const elevMult = elevationMultiplier(
+          arrow.ownerElevation,
+          this.terrain.elevationAt(unit.x, unit.y),
+          ELEVATION_DAMAGE_BONUS,
+        );
         const baseDamage = DAMAGE_MATRIX.archer[unit.unitType];
-        const damage = Math.max(1, Math.round(baseDamage * multiplier));
+        const damage = Math.max(1, Math.round(baseDamage * multiplier * elevMult));
         const killed = unit.takeDamage(damage);
         const tintColor = multiplier >= 2.5 ? 0xff4d3d : multiplier >= 1.5 ? 0xffa733 : 0xf1715f;
         this.spawnImpactPuff(arrow.x, arrow.y, tintColor);
@@ -431,22 +466,42 @@ export class GameScene extends Phaser.Scene {
     this.time.delayedCall(450, () => puff.destroy());
   }
 
-  private drawField(): void {
+  private buildTerrainBodies(): void {
+    for (const r of this.terrain.blockedRects()) {
+      const img = this.obstacles.create(r.cx, r.cy, "obstacle") as Phaser.Physics.Arcade.Image;
+      img.setVisible(false);
+      img.setDisplaySize(r.w, r.h);
+      const body = img.body as Phaser.Physics.Arcade.StaticBody;
+      // Static bodies keep their texture size unless explicitly resized — mirror
+      // the Obstacle class so the collision rect matches the merged terrain rect.
+      body.setSize(r.w, r.h);
+      body.updateFromGameObject();
+    }
+  }
+
+  /** Dark out-of-bounds margin + grass-toned base, drawn behind the terrain tiles. */
+  private drawFieldBackground(): void {
     const g = this.add.graphics();
     // Margin area (darker — out of bounds for units, available for drag/UI).
     g.fillStyle(0x1f1812, 1);
     g.fillRect(0, 0, FIELD_WIDTH, FIELD_HEIGHT);
-    // Playfield body.
-    g.fillStyle(0x3a3127, 1);
+    // Grass base under the tiles — hides any seam if a tile hasn't drawn yet.
+    g.fillStyle(0x3f6b34, 1);
     g.fillRect(PLAYFIELD_LEFT, PLAYFIELD_TOP, PLAYFIELD_WIDTH, PLAYFIELD_HEIGHT);
-    // Center divider on the playfield.
+    g.setDepth(TERRAIN_DEPTH_BG);
+  }
+
+  /** Border, center divider and faint team-half tints, drawn ON TOP of the terrain. */
+  private drawFieldForeground(): void {
+    const g = this.add.graphics();
     const midY = (PLAYFIELD_TOP + PLAYFIELD_BOTTOM) / 2;
-    g.fillStyle(0x2a2520, 1);
+    // Center divider on the playfield.
+    g.fillStyle(0x0e0a06, 0.5);
     g.fillRect(PLAYFIELD_LEFT, midY - 1, PLAYFIELD_WIDTH, 2);
     // Team-colored half tints inside the playfield.
-    g.fillStyle(0x3a7bd5, 0.05);
+    g.fillStyle(0x3a7bd5, 0.07);
     g.fillRect(PLAYFIELD_LEFT, midY, PLAYFIELD_WIDTH, PLAYFIELD_BOTTOM - midY);
-    g.fillStyle(0xc4452d, 0.05);
+    g.fillStyle(0xc4452d, 0.07);
     g.fillRect(PLAYFIELD_LEFT, PLAYFIELD_TOP, PLAYFIELD_WIDTH, midY - PLAYFIELD_TOP);
     // Solid playfield border.
     g.lineStyle(4, 0x0e0a06, 1);
@@ -454,7 +509,7 @@ export class GameScene extends Phaser.Scene {
     // Subtle inner highlight on the playfield rim.
     g.lineStyle(1, 0x4a4036, 0.6);
     g.strokeRect(PLAYFIELD_LEFT + 2, PLAYFIELD_TOP + 2, PLAYFIELD_WIDTH - 4, PLAYFIELD_HEIGHT - 4);
-    g.setDepth(0);
+    g.setDepth(TERRAIN_DEPTH_FG);
   }
 }
 

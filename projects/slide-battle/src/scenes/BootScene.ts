@@ -12,6 +12,21 @@ export class BootScene extends Phaser.Scene {
     super("BootScene");
   }
 
+  preload(): void {
+    // Tiny Swords terrain art (vendored subset under public/assets).
+    const base = "assets/tinyswords/Terrain/";
+    this.load.spritesheet("ts-tiles", base + "Tileset/Tilemap_color1.png", { frameWidth: 64, frameHeight: 64 });
+    this.load.spritesheet("tree-1", base + "Resources/Wood/Trees/Tree1.png", { frameWidth: 192, frameHeight: 256 });
+    this.load.spritesheet("tree-2", base + "Resources/Wood/Trees/Tree2.png", { frameWidth: 192, frameHeight: 256 });
+    this.load.spritesheet("tree-3", base + "Resources/Wood/Trees/Tree3.png", { frameWidth: 192, frameHeight: 192 });
+    this.load.spritesheet("tree-4", base + "Resources/Wood/Trees/Tree4.png", { frameWidth: 192, frameHeight: 192 });
+    this.load.spritesheet("bush-1", base + "Decorations/Bushes/Bushe1.png", { frameWidth: 128, frameHeight: 128 });
+    this.load.spritesheet("bush-2", base + "Decorations/Bushes/Bushe2.png", { frameWidth: 128, frameHeight: 128 });
+    for (let i = 1; i <= 4; i++) {
+      this.load.image(`rock-${i}`, base + `Decorations/Rocks/Rock${i}.png`);
+    }
+  }
+
   create(): void {
     this.generateChipTexture("chip-player", TEAM_COLORS.player);
     this.generateChipTexture("chip-ai", TEAM_COLORS.ai);
@@ -23,6 +38,30 @@ export class BootScene extends Phaser.Scene {
     this.generateArrowShadow("arrow-shadow");
     this.generateObstacleTexture("obstacle");
     this.generateArcherShootOverlay("archer-shoot-overlay");
+    this.generateWaterTexture("ts-water");
+
+    // Crisp pixel-art scaling for the Tiny Swords textures only (per-texture, so
+    // the smooth procedurally-generated chips/icons keep their LINEAR filtering).
+    const pixelKeys = ["ts-tiles", "tree-1", "tree-2", "tree-3", "tree-4", "bush-1", "bush-2", "rock-1", "rock-2", "rock-3", "rock-4"];
+    for (const key of pixelKeys) this.textures.get(key).setFilter(Phaser.Textures.FilterMode.NEAREST);
+
+    // Gentle sway loops for trees + bushes (each instance staggers its start frame).
+    for (let i = 1; i <= 4; i++) {
+      this.anims.create({
+        key: `tree-${i}-sway`,
+        frames: this.anims.generateFrameNumbers(`tree-${i}`, { start: 0, end: 7 }),
+        frameRate: 5,
+        repeat: -1,
+      });
+    }
+    for (let i = 1; i <= 2; i++) {
+      this.anims.create({
+        key: `bush-${i}-sway`,
+        frames: this.anims.generateFrameNumbers(`bush-${i}`, { start: 0, end: 7 }),
+        frameRate: 5,
+        repeat: -1,
+      });
+    }
 
     this.scene.start("MainMenuScene");
   }
@@ -193,6 +232,28 @@ export class BootScene extends Phaser.Scene {
     g.fillStyle(0x5a4f43, 1);
     g.fillRect(1, 1, size - 2, size - 4);
     g.generateTexture(key, size, size);
+    g.destroy();
+  }
+
+  /**
+   * Procedural pixel-water tile — the vendored Tiny Swords subset ships no water
+   * tile. Flat blue with subtle horizontal banding + a few sparkles; the
+   * TerrainRenderer tiles it across lake cells and adds a Graphics foam edge.
+   */
+  private generateWaterTexture(key: string): void {
+    const s = 64;
+    const g = this.make.graphics({ x: 0, y: 0 }, false);
+    g.fillStyle(0x33699e, 1);
+    g.fillRect(0, 0, s, s);
+    g.fillStyle(0x3f79b0, 1);
+    for (let y = 6; y < s; y += 16) g.fillRect(0, y, s, 7);
+    g.fillStyle(0x2b5887, 1);
+    for (let y = 14; y < s; y += 16) g.fillRect(0, y, s, 3);
+    g.fillStyle(0xa9d6ec, 0.45);
+    g.fillRect(10, 10, 10, 2);
+    g.fillRect(38, 26, 14, 2);
+    g.fillRect(20, 46, 9, 2);
+    g.generateTexture(key, s, s);
     g.destroy();
   }
 }

@@ -26,6 +26,8 @@ import {
 export class Arrow extends Phaser.GameObjects.Container {
   ownerTeam: Team = "player";
   readonly ownerType: "archer" = "archer";
+  /** Elevation of the shooter's cell at launch — for the high-ground damage bonus. */
+  ownerElevation = 0;
 
   vx = 0;
   vy = 0;
@@ -44,11 +46,12 @@ export class Arrow extends Phaser.GameObjects.Container {
     scene.add.existing(this);
   }
 
-  launch(vx: number, vy: number, vh: number, owner: Team): void {
+  launch(vx: number, vy: number, vh: number, owner: Team, ownerElevation = 0): void {
     this.vx = vx;
     this.vy = vy;
     this.vh = vh;
     this.ownerTeam = owner;
+    this.ownerElevation = ownerElevation;
     this.visual.setRotation(Math.atan2(vy, vx));
   }
 

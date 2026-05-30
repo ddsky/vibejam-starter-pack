@@ -1,5 +1,6 @@
 import Phaser from "phaser";
 import { Unit } from "../objects/Unit";
+import type { Terrain } from "./Terrain";
 import {
   DAMAGE_MATRIX,
   UNIT_STATS,
@@ -7,6 +8,7 @@ import {
 import {
   KNOCKBACK_VELOCITY_FACTOR,
   FRICTION,
+  ELEVATION_DAMAGE_BONUS,
   PLAYFIELD_LEFT,
   PLAYFIELD_RIGHT,
   PLAYFIELD_TOP,
@@ -55,13 +57,36 @@ export function directionalMultiplier(
   return 1 + 1.5 * (1 - dot);
 }
 
+/**
+ * Elevation damage factor. A unit on higher ground deals `+bonus` and (because
+ * the same comparison flips when it defends) takes `-bonus` against a lower
+ * opponent — i.e. "high ground = +20% attack and +20% defence vs the low unit".
+ * Equal elevation is neutral; per engagement only one side is higher, so exactly
+ * one factor ever applies.
+ */
+export function elevationMultiplier(attackerElev: number, defenderElev: number, bonus: number): number {
+  if (attackerElev > defenderElev) return 1 + bonus;
+  if (attackerElev < defenderElev) return 1 - bonus;
+  return 1;
+}
+
 export class CombatResolver {
   private scene: Phaser.Scene;
   private events: CombatEvents;
+  private terrain?: Terrain;
 
   constructor(scene: Phaser.Scene, events: CombatEvents = {}) {
     this.scene = scene;
     this.events = events;
+  }
+
+  setTerrain(terrain: Terrain): void {
+    this.terrain = terrain;
+  }
+
+  /** Elevation of a unit's current cell (0 when no terrain is set). */
+  private elevAt(unit: Unit): number {
+    return this.terrain?.elevationAt(unit.x, unit.y) ?? 0;
   }
 
   attach(units: Phaser.Physics.Arcade.Group, obstacles: Phaser.Physics.Arcade.StaticGroup): void {
@@ -191,7 +216,8 @@ export class CombatResolver {
         defender.facingAngle,
       );
       const baseDamage = DAMAGE_MATRIX[attacker.unitType][defender.unitType];
-      appliedDamage = Math.max(1, Math.round(baseDamage * multiplier));
+      const elevMult = elevationMultiplier(this.elevAt(attacker), this.elevAt(defender), ELEVATION_DAMAGE_BONUS);
+      appliedDamage = Math.max(1, Math.round(baseDamage * multiplier * elevMult));
       killed = defender.takeDamage(appliedDamage);
     }
 

@@ -74,6 +74,15 @@ export class HUDScene extends Phaser.Scene {
       },
     );
 
+    // Randomize battlefield — restarts the match on a fresh random map.
+    new Button(this, width / 2 - 290, 36, "Randomize", () => this.handleRandomize(), {
+      width: 150,
+      height: 44,
+      fontSize: "16px",
+      bgColor: 0x3a6b35,
+      hoverColor: 0x4a8243,
+    });
+
     this.refreshAP(this.turnManager.getAP());
     this.refreshTurn(this.turnManager.getCurrentTeam());
 
@@ -104,6 +113,15 @@ export class HUDScene extends Phaser.Scene {
 
   private handleGiveUp(): void {
     this.turnManager.giveUp();
+  }
+
+  private handleRandomize(): void {
+    // Fresh random battlefield + units/turns reset. GameScene.create() launches
+    // its own HUD, so stop this one BEFORE starting GameScene (mirrors the
+    // GameOverScene "Play Again" order) to avoid stacking two HUDScenes.
+    this.scene.stop("HUDScene");
+    this.scene.stop("GameScene");
+    this.scene.start("GameScene", { mode: this.mode });
   }
 }
 
