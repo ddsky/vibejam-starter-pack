@@ -5,7 +5,7 @@ import type { Arrow } from "../objects/Arrow";
 import type { TurnManager } from "./TurnManager";
 import type { Terrain } from "./Terrain";
 import { TERRAIN_CELL_W } from "../config/balance";
-import { DAMAGE_MATRIX, UNIT_STATS } from "../config/units";
+import { DAMAGE_MATRIX } from "../config/units";
 import {
   AI_ACTION_PACING_MS,
   ARROW_HSPEED_MIN,
@@ -20,10 +20,19 @@ import {
   PLAYFIELD_LEFT,
   PLAYFIELD_RIGHT,
   PLAYFIELD_TOP,
+  TERRAIN_CELL_H,
 } from "../config/balance";
 import { launchUnit } from "./DragInput";
 
 const AI_OBSTACLE_CLEARANCE = 10;
+const AI_ARCHER_ACCURATE_RANGE = 260;
+const AI_ARCHER_LONG_RANGE = 760;
+const AI_ARCHER_MAX_HIT_CHANCE = 0.9;
+const AI_ARCHER_MIN_SHOT_QUALITY = 0.18;
+const AI_LOS_FOREST_CELL_PENALTY = 0.17;
+const AI_LOS_RIDGE_CELL_PENALTY = 0.12;
+const AI_TARGET_UPHILL_PENALTY = 0.16;
+const AI_ATTACKER_HIGH_GROUND_BONUS = 0.05;
 const POSITIONING_POWER_LEVELS = [0.38, 0.52, 0.66, 0.8];
 const POSITIONING_ANGLE_OFFSETS_DEG = [0, -18, 18, -34, 34, -52, 52, -72, 72, -96, 96];
 
@@ -58,6 +67,8 @@ type RangedAction = {
   vx: number;
   vy: number;
   vh: number;
+  hitChance: number;
+  missRadius: number;
   score: number;
 };
 type MoveAction = {
@@ -68,6 +79,17 @@ type MoveAction = {
   score: number;
 };
 type Action = MeleeAction | RangedAction | MoveAction;
+type BallisticShot = {
+  vx: number;
+  vy: number;
+  vh: number;
+  dist: number;
+};
+type ShotQuality = {
+  hitChance: number;
+  missRadius: number;
+  losPenalty: number;
+};
 
 export class AIController {
   private deps: AIDeps;
@@ -124,7 +146,7 @@ export class AIController {
     for (const attacker of aiUnits) {
       if (attacker.unitType === "archer") {
         for (const target of enemies) {
-          const action = this.evaluateRanged(attacker, target, allUnits, obstacles);
+          const action = this.evaluateRanged(attacker, target, allUnits);
           if (action) candidates.push(action);
         }
       } else {
@@ -183,41 +205,37 @@ export class AIController {
     attacker: Unit,
     target: Unit,
     all: Unit[],
-    obstacles: Obstacle[],
   ): RangedAction | null {
     const dx = target.x - attacker.x;
     const dy = target.y - attacker.y;
     const dist = Math.hypot(dx, dy);
     if (dist < 1) return null;
-    // Arrows now fly OVER obstacles, so we no longer require a clear ground path.
-    // We DO still want to avoid hitting our own units, so check for friendly
-    // archers/etc. on the line as a coarse heuristic.
+    // Arrows can arc over ground obstacles, but the archer still needs a
+    // readable shot. Friendlies block the firing lane outright; terrain
+    // between shooter and target lowers shot quality instead of pretending
+    // the AI has perfect x-ray aim through trees and ridge lines.
     if (!hasClearOfFriendlies(attacker, target, all)) return null;
 
-    // Choose a horizontal speed proportional to distance, then derive the
-    // vertical (vh) so the arrow's ballistic range matches `dist` exactly.
-    // Range formula:  range = hspeed × 2 × vh / gravity
-    // → vh = range × gravity / (2 × hspeed)
-    const hspeed = Phaser.Math.Clamp(
-      Math.sqrt(dist) * 22, // gentle scaling; long shots want fast arrows
-      ARROW_HSPEED_MIN,
-      ARROW_HSPEED_MAX,
-    );
-    const vh = (dist * ARROW_GRAVITY) / (2 * hspeed);
-    // Reject if the required vh is way out of bounds — target's too far/close.
-    if (vh < ARROW_VH_MIN * 0.7 || vh > ARROW_VH_MAX * 1.3) return null;
+    const origin = archerMuzzle(attacker, target.x, target.y);
+    const shot = solveBallisticShot(origin.x, origin.y, target.x, target.y);
+    if (!shot) return null;
+    const quality = rangedShotQuality(attacker, target, this.deps.terrain, shot.dist);
+    if (quality.hitChance < AI_ARCHER_MIN_SHOT_QUALITY) return null;
 
     const damage = DAMAGE_MATRIX.archer[target.unitType];
-    const killBonus = damage >= target.hp ? 35 : 0;
-    const safetyBonus = 8;
-    const score = damage + killBonus + safetyBonus - dist * 0.005;
+    const expectedDamage = damage * quality.hitChance;
+    const killBonus = damage >= target.hp ? 35 * quality.hitChance : 0;
+    const safetyBonus = 8 * quality.hitChance;
+    const score = expectedDamage + killBonus + safetyBonus - dist * 0.004 - quality.losPenalty * 8;
     return {
       kind: "ranged",
       attacker,
       target,
-      vx: (dx / dist) * hspeed,
-      vy: (dy / dist) * hspeed,
-      vh: Phaser.Math.Clamp(vh, ARROW_VH_MIN, ARROW_VH_MAX),
+      vx: shot.vx,
+      vy: shot.vy,
+      vh: shot.vh,
+      hitChance: quality.hitChance,
+      missRadius: quality.missRadius,
       score,
     };
   }
@@ -368,25 +386,151 @@ export class AIController {
   }
 
   private executeAction(action: Action): void {
-    const angleNoiseRange = action.kind === "ranged" ? 3 : 1;
-    const speedNoiseRange = action.kind === "ranged" ? 0.05 : 0.02;
+    if (action.kind === "ranged") {
+      this.executeRangedAction(action);
+      this.deps.turnManager.consumeAP();
+      return;
+    }
+
+    const angleNoiseRange = 1;
+    const speedNoiseRange = 0.02;
     const angleNoise = Phaser.Math.DegToRad(Phaser.Math.RND.realInRange(-angleNoiseRange, angleNoiseRange));
     const speedNoise = Phaser.Math.RND.realInRange(1 - speedNoiseRange, 1 + speedNoiseRange);
     const v = new Phaser.Math.Vector2(action.vx, action.vy);
     v.rotate(angleNoise);
     v.scale(speedNoise);
 
-    if (action.kind === "ranged") {
-      const u = action.attacker;
-      const len = v.length() || 1;
-      const ox = u.x + (v.x / len) * (u.radius + 6);
-      const oy = u.y + (v.y / len) * (u.radius + 6);
-      this.deps.spawnArrow(ox, oy, v.x, v.y, action.vh, "ai");
-    } else {
-      launchUnit(action.attacker, v.x, v.y);
-    }
+    launchUnit(action.attacker, v.x, v.y);
     this.deps.turnManager.consumeAP();
   }
+
+  private executeRangedAction(action: RangedAction): void {
+    const origin = archerMuzzle(action.attacker, action.target.x, action.target.y);
+    const aim = rangedAimPoint(origin.x, origin.y, action);
+    const shot = solveBallisticShot(origin.x, origin.y, aim.x, aim.y) ?? {
+      vx: action.vx,
+      vy: action.vy,
+      vh: action.vh,
+      dist: Math.hypot(action.vx, action.vy),
+    };
+    this.deps.spawnArrow(origin.x, origin.y, shot.vx, shot.vy, shot.vh, "ai");
+  }
+}
+
+function archerMuzzle(attacker: Unit, targetX: number, targetY: number): { x: number; y: number } {
+  const dx = targetX - attacker.x;
+  const dy = targetY - attacker.y;
+  const dist = Math.hypot(dx, dy) || 1;
+  return {
+    x: attacker.x + (dx / dist) * (attacker.radius + 6),
+    y: attacker.y + (dy / dist) * (attacker.radius + 6),
+  };
+}
+
+function solveBallisticShot(fromX: number, fromY: number, toX: number, toY: number): BallisticShot | null {
+  const dx = toX - fromX;
+  const dy = toY - fromY;
+  const dist = Math.hypot(dx, dy);
+  if (dist < 1) return null;
+  const hspeed = Phaser.Math.Clamp(Math.sqrt(dist) * 22, ARROW_HSPEED_MIN, ARROW_HSPEED_MAX);
+  const vh = (dist * ARROW_GRAVITY) / (2 * hspeed);
+  if (vh < ARROW_VH_MIN * 0.7 || vh > ARROW_VH_MAX * 1.3) return null;
+  return {
+    vx: (dx / dist) * hspeed,
+    vy: (dy / dist) * hspeed,
+    vh: Phaser.Math.Clamp(vh, ARROW_VH_MIN, ARROW_VH_MAX),
+    dist,
+  };
+}
+
+function rangedShotQuality(attacker: Unit, target: Unit, terrain: Terrain, dist: number): ShotQuality {
+  const rangeT = Phaser.Math.Clamp(
+    (dist - AI_ARCHER_ACCURATE_RANGE) / (AI_ARCHER_LONG_RANGE - AI_ARCHER_ACCURATE_RANGE),
+    0,
+    1,
+  );
+  const rangePenalty = Math.pow(rangeT, 1.35) * 0.4;
+  const attackerElev = terrain.elevationAt(attacker.x, attacker.y);
+  const targetElev = terrain.elevationAt(target.x, target.y);
+  const losPenalty = lineOfSightPenalty(attacker.x, attacker.y, target.x, target.y, attackerElev, targetElev, terrain);
+  const uphillPenalty = Math.max(0, targetElev - attackerElev) * AI_TARGET_UPHILL_PENALTY;
+  const highGroundBonus = Math.max(0, attackerElev - targetElev) * AI_ATTACKER_HIGH_GROUND_BONUS;
+  const hitChance = Phaser.Math.Clamp(
+    AI_ARCHER_MAX_HIT_CHANCE - rangePenalty - losPenalty - uphillPenalty + highGroundBonus,
+    0.05,
+    AI_ARCHER_MAX_HIT_CHANCE,
+  );
+  const missRadius = target.radius + 18 + (1 - hitChance) * 135 + dist * 0.025 + losPenalty * 45;
+  return { hitChance, missRadius, losPenalty };
+}
+
+function lineOfSightPenalty(
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  startElev: number,
+  endElev: number,
+  terrain: Terrain,
+): number {
+  const dist = Phaser.Math.Distance.Between(x1, y1, x2, y2);
+  const step = Math.max(8, Math.min(TERRAIN_CELL_W, TERRAIN_CELL_H) * 0.45);
+  const steps = Math.max(1, Math.ceil(dist / step));
+  const seen = new Set<string>();
+  let penalty = 0;
+
+  for (let i = 1; i < steps; i++) {
+    const t = i / steps;
+    // Endpoint cells contain the units themselves; target elevation is handled
+    // separately so a hilltop defender is penalized once, not once per sample.
+    if (t < 0.08 || t > 0.92) continue;
+    const x = Phaser.Math.Linear(x1, x2, t);
+    const y = Phaser.Math.Linear(y1, y2, t);
+    const cx = terrain.worldToCol(x);
+    const cy = terrain.worldToRow(y);
+    const key = `${cx},${cy}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    const cell = terrain.cell(cx, cy);
+    if (cell.kind === "forest") penalty += AI_LOS_FOREST_CELL_PENALTY;
+
+    const sightLineElev = Phaser.Math.Linear(startElev, endElev, t);
+    const ridgeExcess = cell.elevation - sightLineElev;
+    if (ridgeExcess > 0.25) penalty += ridgeExcess * AI_LOS_RIDGE_CELL_PENALTY;
+  }
+
+  return Phaser.Math.Clamp(penalty, 0, 0.65);
+}
+
+function rangedAimPoint(originX: number, originY: number, action: RangedAction): { x: number; y: number } {
+  const tx = action.target.x;
+  const ty = action.target.y;
+  const dx = tx - originX;
+  const dy = ty - originY;
+  const dist = Math.hypot(dx, dy) || 1;
+  const ux = dx / dist;
+  const uy = dy / dist;
+  const px = -uy;
+  const py = ux;
+
+  if (Phaser.Math.RND.frac() <= action.hitChance) {
+    const jitter = action.target.radius * Phaser.Math.Linear(0.18, 0.5, 1 - action.hitChance);
+    const angle = Phaser.Math.RND.realInRange(0, Math.PI * 2);
+    const radius = Phaser.Math.RND.realInRange(0, jitter);
+    return {
+      x: tx + Math.cos(angle) * radius,
+      y: ty + Math.sin(angle) * radius,
+    };
+  }
+
+  const side = Phaser.Math.RND.pick([-1, 1]);
+  const lateralMiss = Phaser.Math.RND.realInRange(action.target.radius + 18, action.missRadius);
+  const rangeMiss = Phaser.Math.RND.realInRange(-action.target.radius * 0.75, action.target.radius * 1.1);
+  return {
+    x: tx + px * side * lateralMiss + ux * rangeMiss,
+    y: ty + py * side * lateralMiss + uy * rangeMiss,
+  };
 }
 
 function neededSlideSpeed(dist: number): number | null {
