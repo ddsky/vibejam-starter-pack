@@ -1,7 +1,15 @@
 import Phaser from "phaser";
-import { Button } from "../ui/Button";
+
+type MenuButtonTone = "blue" | "red" | "brown" | "full";
 
 export class MainMenuScene extends Phaser.Scene {
+  private overlay?: HTMLDivElement;
+  private fullscreenButton?: HTMLButtonElement;
+  private hint?: HTMLDivElement;
+
+  private readonly handleResize = () => this.syncOverlayBounds();
+  private readonly handleFullscreenChange = () => this.refreshFullscreenButton();
+
   constructor() {
     super("MainMenuScene");
   }
@@ -10,56 +18,115 @@ export class MainMenuScene extends Phaser.Scene {
     const { width, height } = this.scale;
 
     this.drawBackdrop(width, height);
+    this.createDOMMenu();
 
-    this.add
-      .text(width / 2, height / 2 - 160, "Slide Battle", {
-        fontSize: "84px",
-        color: "#f1e9d2",
-        fontStyle: "bold",
-      })
-      .setOrigin(0.5)
-      .setShadow(4, 4, "#0a0805", 6, true, true);
+    this.scale.on(Phaser.Scale.Events.RESIZE, this.handleResize);
+    this.scale.on(Phaser.Scale.Events.ENTER_FULLSCREEN, this.handleFullscreenChange);
+    this.scale.on(Phaser.Scale.Events.LEAVE_FULLSCREEN, this.handleFullscreenChange);
+    window.addEventListener("resize", this.handleResize);
+    document.addEventListener("fullscreenchange", this.handleFullscreenChange);
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, this.destroyDOMMenu, this);
+  }
 
-    this.add
-      .text(width / 2, height / 2 - 90, "Drag. Release. Crush.", {
-        fontSize: "22px",
-        color: "#c9b896",
-      })
-      .setOrigin(0.5);
+  private createDOMMenu(): void {
+    this.destroyDOMMenu();
 
-    new Button(this, width / 2, height / 2 + 20, "Play vs AI", () => {
-      this.scene.start("GameScene", { mode: "ai" });
+    const overlay = document.createElement("div");
+    overlay.className = "slide-battle-menu";
+
+    this.fullscreenButton = this.createButton("Fullscreen", "full", () => this.toggleFullscreen());
+    this.fullscreenButton.classList.add("slide-battle-menu__fullscreen");
+
+    const center = document.createElement("div");
+    center.className = "slide-battle-menu__center";
+
+    const title = document.createElement("div");
+    title.className = "slide-battle-menu__title";
+    title.textContent = "Slide Battle";
+
+    const subtitle = document.createElement("div");
+    subtitle.className = "slide-battle-menu__subtitle";
+    subtitle.textContent = "Drag. Release. Crush.";
+
+    const buttons = document.createElement("div");
+    buttons.className = "slide-battle-menu__buttons";
+    buttons.append(
+      this.createButton("Play vs AI", "blue", () => this.scene.start("GameScene", { mode: "ai" })),
+      this.createButton("Play Local PvP", "red", () => this.scene.start("GameScene", { mode: "pvp" })),
+      this.createButton("Quit", "brown", () => this.handleQuit()),
+    );
+
+    center.append(title, subtitle, buttons);
+    overlay.append(this.fullscreenButton, center);
+    (this.game.canvas.parentElement ?? document.body).appendChild(overlay);
+
+    this.overlay = overlay;
+    this.refreshFullscreenButton();
+    this.syncOverlayBounds();
+    requestAnimationFrame(this.handleResize);
+  }
+
+  private createButton(label: string, tone: MenuButtonTone, onClick: () => void): HTMLButtonElement {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = label;
+    button.className = `slide-battle-menu__button slide-battle-menu__button--${tone}`;
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      onClick();
     });
+    return button;
+  }
 
-    new Button(
-      this,
-      width / 2,
-      height / 2 + 105,
-      "Play Local PvP",
-      () => {
-        this.scene.start("GameScene", { mode: "pvp" });
-      },
-      { bgColor: 0xc4452d, hoverColor: 0xd9573e },
-    );
+  private syncOverlayBounds(): void {
+    if (!this.overlay) return;
+    const rect = this.game.canvas.getBoundingClientRect();
+    this.overlay.style.left = `${rect.left}px`;
+    this.overlay.style.top = `${rect.top}px`;
+    this.overlay.style.width = `${rect.width}px`;
+    this.overlay.style.height = `${rect.height}px`;
+  }
 
-    new Button(
-      this,
-      width / 2,
-      height / 2 + 190,
-      "Quit",
-      () => {
-        window.close();
-        // some browsers refuse to close — show a hint instead
-        const hint = this.add
-          .text(width / 2, height - 60, "Close this tab to quit.", {
-            fontSize: "16px",
-            color: "#c9b896",
-          })
-          .setOrigin(0.5);
-        this.time.delayedCall(2000, () => hint.destroy());
-      },
-      { bgColor: 0x5a4f43, hoverColor: 0x6e6253 },
-    );
+  private toggleFullscreen(): void {
+    if (this.scale.isFullscreen) this.scale.stopFullscreen();
+    else this.scale.startFullscreen();
+    this.time.delayedCall(50, () => {
+      this.refreshFullscreenButton();
+      this.syncOverlayBounds();
+    });
+  }
+
+  private refreshFullscreenButton(): void {
+    if (!this.fullscreenButton) return;
+    this.fullscreenButton.textContent = this.scale.isFullscreen || !!document.fullscreenElement
+      ? "Exit Full"
+      : "Fullscreen";
+  }
+
+  private handleQuit(): void {
+    window.close();
+    this.hint?.remove();
+    this.hint = document.createElement("div");
+    this.hint.className = "slide-battle-menu__hint";
+    this.hint.textContent = "Close this tab to quit.";
+    this.overlay?.appendChild(this.hint);
+    this.time.delayedCall(2000, () => {
+      this.hint?.remove();
+      this.hint = undefined;
+    });
+  }
+
+  private destroyDOMMenu(): void {
+    this.scale?.off(Phaser.Scale.Events.RESIZE, this.handleResize);
+    this.scale?.off(Phaser.Scale.Events.ENTER_FULLSCREEN, this.handleFullscreenChange);
+    this.scale?.off(Phaser.Scale.Events.LEAVE_FULLSCREEN, this.handleFullscreenChange);
+    window.removeEventListener("resize", this.handleResize);
+    document.removeEventListener("fullscreenchange", this.handleFullscreenChange);
+    this.overlay?.remove();
+    this.overlay = undefined;
+    this.fullscreenButton = undefined;
+    this.hint = undefined;
   }
 
   private drawBackdrop(width: number, height: number): void {

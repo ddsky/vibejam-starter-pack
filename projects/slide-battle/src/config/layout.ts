@@ -21,9 +21,9 @@ export interface ObstacleSpawn {
   height: number;
 }
 
-const ROW_INSET = 40;
-const playerRowY = PLAYFIELD_BOTTOM - ROW_INSET;
-const aiRowY = PLAYFIELD_TOP + ROW_INSET;
+const SPAWN_ROW_INSET = 54;
+const playerRowY = PLAYFIELD_BOTTOM - SPAWN_ROW_INSET;
+const aiRowY = PLAYFIELD_TOP + SPAWN_ROW_INSET;
 const lane = (i: number, n: number) => {
   const spacing = PLAYFIELD_WIDTH / (n + 1);
   return PLAYFIELD_LEFT + spacing * (i + 1);

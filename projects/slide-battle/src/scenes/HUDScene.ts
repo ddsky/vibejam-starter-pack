@@ -2,19 +2,43 @@ import Phaser from "phaser";
 import type { Team, GameMode } from "../config/units";
 import { TEAM_COLORS } from "../config/units";
 import type { TurnManager } from "../systems/TurnManager";
-import { Button } from "../ui/Button";
 import { sounds } from "../audio/SoundManager";
+import {
+  CHARGE_MODE_LABELS,
+  CHARGE_MODE_REGISTRY_KEY,
+  CHARGE_MODES,
+  isChargeMode,
+  readStoredChargeMode,
+  writeStoredChargeMode,
+  type ChargeMode,
+} from "../config/charge";
 
 export interface HUDInit {
   turnManager: TurnManager;
   mode?: GameMode;
 }
 
+type HudButtonTone = "brown" | "green" | "blue" | "red";
+
 export class HUDScene extends Phaser.Scene {
   private turnManager!: TurnManager;
-  private apIcons: Phaser.GameObjects.Arc[] = [];
-  private turnLabel!: Phaser.GameObjects.Text;
+  private overlay?: HTMLDivElement;
+  private turnLabel?: HTMLDivElement;
+  private apIcons: HTMLSpanElement[] = [];
+  private chargeModeButtons = new Map<ChargeMode, HTMLButtonElement>();
+  private muteButton?: HTMLButtonElement;
+  private fullscreenButton?: HTMLButtonElement;
+  private currentTeam: Team = "player";
   private mode: GameMode = "ai";
+
+  private readonly handleAPChanged = (ap: number) => this.refreshAP(ap);
+  private readonly handleTurnChanged = (team: Team) => this.refreshTurn(team);
+  private readonly handleGameOver = () => {
+    this.overlay?.classList.add("slide-battle-hud--disabled");
+    this.events.emit("hud-disable");
+  };
+  private readonly handleResize = () => this.syncOverlayBounds();
+  private readonly handleFullscreenChange = () => this.refreshFullscreenButton();
 
   constructor() {
     super("HUDScene");
@@ -23,91 +47,165 @@ export class HUDScene extends Phaser.Scene {
   create(data: HUDInit): void {
     this.turnManager = data.turnManager;
     this.mode = data.mode ?? "ai";
-    const { width } = this.scale;
+    this.registry.set(CHARGE_MODE_REGISTRY_KEY, this.currentChargeMode());
+    this.createDOMHUD();
 
-    // top center panel
-    const panel = this.add.rectangle(width / 2, 36, 360, 56, 0x1a1510, 0.8).setStrokeStyle(2, 0xf1e9d2, 0.4);
-    panel.setOrigin(0.5);
+    this.refreshTurn(this.turnManager.getCurrentTeam());
+    this.refreshAP(this.turnManager.getAP());
 
-    this.turnLabel = this.add
-      .text(width / 2 - 130, 36, "Your Turn", {
-        fontSize: "20px",
-        color: "#f1e9d2",
-        fontStyle: "bold",
-      })
-      .setOrigin(0, 0.5);
+    this.turnManager.on("ap-changed", this.handleAPChanged);
+    this.turnManager.on("turn-changed", this.handleTurnChanged);
+    this.turnManager.on("game-over", this.handleGameOver);
+    this.scale.on(Phaser.Scale.Events.RESIZE, this.handleResize);
+    this.scale.on(Phaser.Scale.Events.ENTER_FULLSCREEN, this.handleFullscreenChange);
+    this.scale.on(Phaser.Scale.Events.LEAVE_FULLSCREEN, this.handleFullscreenChange);
+    window.addEventListener("resize", this.handleResize);
+    document.addEventListener("fullscreenchange", this.handleFullscreenChange);
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, this.destroyDOMHUD, this);
+  }
 
-    // AP icons
-    const apStart = STARTING_X_OFFSET(width);
+  private createDOMHUD(): void {
+    this.destroyDOMHUD();
+
+    const overlay = document.createElement("div");
+    overlay.className = "slide-battle-hud";
+
+    const bar = document.createElement("div");
+    bar.className = "slide-battle-hud__bar";
+
+    this.muteButton = this.createButton(sounds.isMuted() ? "Unmute" : "Mute", "brown", () => {
+      sounds.setMuted(!sounds.isMuted());
+      if (sounds.isMuted()) sounds.stopMusic();
+      else sounds.startMusic();
+      if (this.muteButton) this.muteButton.textContent = sounds.isMuted() ? "Unmute" : "Mute";
+    });
+
+    this.fullscreenButton = this.createButton("Fullscreen", "blue", () => this.toggleFullscreen());
+    const randomizeButton = this.createButton("Randomize", "green", () => this.handleRandomize());
+    const chargeModeControl = this.createChargeModeControl();
+    const giveUpButton = this.createButton("Give Up", "red", () => this.handleGiveUp());
+
+    const turnPanel = document.createElement("div");
+    turnPanel.className = "slide-battle-hud__turn-panel";
+
+    this.turnLabel = document.createElement("div");
+    this.turnLabel.className = "slide-battle-hud__turn-label";
+
+    const apList = document.createElement("div");
+    apList.className = "slide-battle-hud__ap-list";
+    this.apIcons = [];
     for (let i = 0; i < this.turnManager.getStartingAP(); i++) {
-      const dot = this.add.circle(apStart + i * 30, 36, 10, 0x7ee787).setStrokeStyle(2, 0xf1e9d2);
+      const dot = document.createElement("span");
+      dot.className = "slide-battle-hud__ap-dot";
+      apList.appendChild(dot);
       this.apIcons.push(dot);
     }
 
-    // Give Up button (top right)
-    new Button(this, width - 100, 36, "Give Up", () => this.handleGiveUp(), {
-      width: 160,
-      height: 44,
-      fontSize: "16px",
-      bgColor: 0x8a3a2a,
-      hoverColor: 0xa64a37,
-    });
-
-    // Mute toggle (top left)
-    const muteBtn = new Button(
-      this,
-      80,
-      36,
-      sounds.isMuted() ? "Unmute" : "Mute",
-      () => {
-        sounds.setMuted(!sounds.isMuted());
-        if (sounds.isMuted()) sounds.stopMusic();
-        else sounds.startMusic();
-        muteBtn.setText(sounds.isMuted() ? "Unmute" : "Mute");
-      },
-      {
-        width: 120,
-        height: 44,
-        fontSize: "16px",
-        bgColor: 0x3a3127,
-        hoverColor: 0x4a4036,
-      },
+    turnPanel.append(this.turnLabel, apList);
+    bar.append(
+      this.muteButton,
+      this.fullscreenButton,
+      randomizeButton,
+      chargeModeControl,
+      turnPanel,
+      giveUpButton,
     );
+    overlay.appendChild(bar);
+    (this.game.canvas.parentElement ?? document.body).appendChild(overlay);
 
-    // Randomize battlefield — restarts the match on a fresh random map.
-    new Button(this, width / 2 - 290, 36, "Randomize", () => this.handleRandomize(), {
-      width: 150,
-      height: 44,
-      fontSize: "16px",
-      bgColor: 0x3a6b35,
-      hoverColor: 0x4a8243,
+    this.overlay = overlay;
+    this.refreshFullscreenButton();
+    this.refreshChargeModeButtons();
+    this.syncOverlayBounds();
+    requestAnimationFrame(this.handleResize);
+  }
+
+  private createChargeModeControl(): HTMLDivElement {
+    const control = document.createElement("div");
+    control.className = "slide-battle-hud__mode-control";
+    control.setAttribute("role", "group");
+    control.setAttribute("aria-label", "Charge mode");
+    this.chargeModeButtons.clear();
+
+    for (const mode of CHARGE_MODES) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = CHARGE_MODE_LABELS[mode];
+      button.className = "slide-battle-hud__mode-button";
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this.setChargeMode(mode);
+      });
+      control.appendChild(button);
+      this.chargeModeButtons.set(mode, button);
+    }
+
+    return control;
+  }
+
+  private createButton(label: string, tone: HudButtonTone, onClick: () => void): HTMLButtonElement {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = label;
+    button.className = `slide-battle-hud__button slide-battle-hud__button--${tone}`;
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      onClick();
     });
+    return button;
+  }
 
-    this.refreshAP(this.turnManager.getAP());
-    this.refreshTurn(this.turnManager.getCurrentTeam());
-
-    this.turnManager.on("ap-changed", (ap: number) => this.refreshAP(ap));
-    this.turnManager.on("turn-changed", (team: Team) => this.refreshTurn(team));
-    this.turnManager.on("game-over", () => this.events.emit("hud-disable"));
+  private syncOverlayBounds(): void {
+    if (!this.overlay) return;
+    const rect = this.game.canvas.getBoundingClientRect();
+    this.overlay.style.left = `${rect.left}px`;
+    this.overlay.style.top = `${rect.top}px`;
+    this.overlay.style.width = `${rect.width}px`;
+    this.overlay.style.height = `${rect.height}px`;
   }
 
   private refreshAP(ap: number): void {
+    const teamColor = "#" + TEAM_COLORS[this.currentTeam].toString(16).padStart(6, "0");
     this.apIcons.forEach((icon, i) => {
       const used = i >= ap;
-      icon.setFillStyle(used ? 0x3a3127 : 0x7ee787);
-      icon.setAlpha(used ? 0.6 : 1);
+      icon.style.backgroundColor = used ? "#1a1510" : teamColor;
+      icon.classList.toggle("slide-battle-hud__ap-dot--spent", used);
     });
   }
 
   private refreshTurn(team: Team): void {
+    this.currentTeam = team;
+    if (!this.turnLabel) return;
+
     const isBlue = team === "player";
+    const hex = "#" + TEAM_COLORS[team].toString(16).padStart(6, "0");
     if (this.mode === "pvp") {
-      this.turnLabel.setText(isBlue ? "Blue's Turn" : "Red's Turn");
-      const hex = "#" + TEAM_COLORS[team].toString(16).padStart(6, "0");
-      this.turnLabel.setColor(hex);
+      this.turnLabel.textContent = isBlue ? "Blue's Turn" : "Red's Turn";
     } else {
-      this.turnLabel.setText(isBlue ? "Your Turn" : "AI Turn");
-      this.turnLabel.setColor(isBlue ? "#7ee787" : "#f1715f");
+      this.turnLabel.textContent = isBlue ? "Your Turn" : "AI Turn";
+    }
+    this.turnLabel.style.color = hex;
+    this.refreshAP(this.turnManager.getAP());
+  }
+
+  private currentChargeMode(): ChargeMode {
+    const registryMode = this.registry.get(CHARGE_MODE_REGISTRY_KEY);
+    return isChargeMode(registryMode) ? registryMode : readStoredChargeMode();
+  }
+
+  private setChargeMode(mode: ChargeMode): void {
+    writeStoredChargeMode(mode);
+    this.registry.set(CHARGE_MODE_REGISTRY_KEY, mode);
+    this.refreshChargeModeButtons(mode);
+  }
+
+  private refreshChargeModeButtons(mode: ChargeMode = this.currentChargeMode()): void {
+    for (const [buttonMode, button] of this.chargeModeButtons) {
+      const selected = buttonMode === mode;
+      button.classList.toggle("slide-battle-hud__mode-button--selected", selected);
+      button.setAttribute("aria-pressed", selected ? "true" : "false");
     }
   }
 
@@ -116,16 +214,42 @@ export class HUDScene extends Phaser.Scene {
   }
 
   private handleRandomize(): void {
-    // Fresh random battlefield + units/turns reset. GameScene.create() launches
-    // its own HUD, so stop this one BEFORE starting GameScene (mirrors the
-    // GameOverScene "Play Again" order) to avoid stacking two HUDScenes.
     this.scene.stop("HUDScene");
     this.scene.stop("GameScene");
     this.scene.start("GameScene", { mode: this.mode });
   }
-}
 
-function STARTING_X_OFFSET(width: number): number {
-  // place AP dots in the right half of the center panel
-  return width / 2 + 20;
+  private toggleFullscreen(): void {
+    if (this.scale.isFullscreen) this.scale.stopFullscreen();
+    else this.scale.startFullscreen();
+    this.time.delayedCall(50, () => {
+      this.refreshFullscreenButton();
+      this.syncOverlayBounds();
+    });
+  }
+
+  private refreshFullscreenButton(): void {
+    if (!this.fullscreenButton) return;
+    this.fullscreenButton.textContent = this.scale.isFullscreen || !!document.fullscreenElement
+      ? "Exit Full"
+      : "Fullscreen";
+  }
+
+  private destroyDOMHUD(): void {
+    this.turnManager?.off("ap-changed", this.handleAPChanged);
+    this.turnManager?.off("turn-changed", this.handleTurnChanged);
+    this.turnManager?.off("game-over", this.handleGameOver);
+    this.scale?.off(Phaser.Scale.Events.RESIZE, this.handleResize);
+    this.scale?.off(Phaser.Scale.Events.ENTER_FULLSCREEN, this.handleFullscreenChange);
+    this.scale?.off(Phaser.Scale.Events.LEAVE_FULLSCREEN, this.handleFullscreenChange);
+    window.removeEventListener("resize", this.handleResize);
+    document.removeEventListener("fullscreenchange", this.handleFullscreenChange);
+    this.overlay?.remove();
+    this.overlay = undefined;
+    this.turnLabel = undefined;
+    this.muteButton = undefined;
+    this.fullscreenButton = undefined;
+    this.apIcons = [];
+    this.chargeModeButtons.clear();
+  }
 }

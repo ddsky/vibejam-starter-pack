@@ -1,5 +1,6 @@
 import Phaser from "phaser";
 import { FIELD_WIDTH, FIELD_HEIGHT } from "../config/balance";
+import { crispTextStyle } from "./textStyle";
 
 const HORIZONTAL_MARGIN = 60;
 const TOP_MARGIN = 60;
@@ -52,14 +53,14 @@ export function spawnDamagePopup(
   );
 
   const text = scene.add
-    .text(startX, startY, `${amount}`, {
+    .text(startX, startY, `${amount}`, crispTextStyle({
       fontFamily: "system-ui, -apple-system, Segoe UI, sans-serif",
       fontSize: `${fontSize}px`,
       color,
       fontStyle: "bold",
       stroke,
       strokeThickness,
-    })
+    }))
     .setOrigin(0.5)
     .setDepth(60);
 
@@ -88,14 +89,14 @@ export function spawnDamagePopup(
       FIELD_HEIGHT - BOTTOM_MARGIN,
     );
     const badge = scene.add
-      .text(startX, badgeStartY, badgeLabel, {
+      .text(startX, badgeStartY, badgeLabel, crispTextStyle({
         fontFamily: "system-ui, -apple-system, Segoe UI, sans-serif",
         fontSize: `${badgeFontSize}px`,
         color: badgeColor,
         fontStyle: "bold",
         stroke,
         strokeThickness: badgeStrokeThickness,
-      })
+      }))
       .setOrigin(0.5)
       .setDepth(60);
     scene.tweens.add({

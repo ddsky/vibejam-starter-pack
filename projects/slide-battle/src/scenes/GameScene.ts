@@ -33,6 +33,12 @@ import { CombatResolver, directionalMultiplier, elevationMultiplier } from "../s
 import { TurnManager } from "../systems/TurnManager";
 import { AIController } from "../systems/AIController";
 import { DAMAGE_MATRIX, type Team, type GameMode } from "../config/units";
+import {
+  CHARGE_MODE_REGISTRY_KEY,
+  isChargeMode,
+  readStoredChargeMode,
+  type ChargeMode,
+} from "../config/charge";
 import { Arrow } from "../objects/Arrow";
 import { sounds } from "../audio/SoundManager";
 import { spawnDamagePopup } from "../ui/DamagePopup";
@@ -56,8 +62,8 @@ export class GameScene extends Phaser.Scene {
 
   create(data?: { mode?: GameMode }): void {
     this.mode = data?.mode ?? "ai";
-    // World physics bounds = inner playfield. Margin around the playfield is
-    // out-of-bounds for units but available for the cursor to drag into.
+    this.registry.set(CHARGE_MODE_REGISTRY_KEY, readStoredChargeMode());
+    // World physics bounds = playable field. Only a thin rim/top HUD band sit outside it.
     this.physics.world.setBounds(PLAYFIELD_LEFT, PLAYFIELD_TOP, PLAYFIELD_WIDTH, PLAYFIELD_HEIGHT);
 
     // Fresh random battlefield every time create() runs (new match / Randomize).
@@ -104,16 +110,19 @@ export class GameScene extends Phaser.Scene {
       this,
       (unit) => this.canDragUnit(unit),
       (unit, vx, vy) => this.handleLaunch(unit, vx, vy),
+      () => this.getChargeMode(),
     );
     this.archerInput = new ArcherInput(
       this,
       (unit) => this.canDragUnit(unit),
       (unit, mode, vx, vy) => this.handleArcherLaunch(unit, mode, vx, vy),
+      () => this.getChargeMode(),
     );
     this.knightCurve = new KnightCurve(
       this,
       (unit) => this.canDragUnit(unit),
       (unit, vx, vy, curveAng) => this.handleKnightLaunch(unit, vx, vy, curveAng),
+      () => this.getChargeMode(),
     );
 
     this.units.getChildren().forEach((obj) => {
@@ -362,8 +371,15 @@ export class GameScene extends Phaser.Scene {
   private canDragUnit(unit: Unit): boolean {
     if (!this.turnManager.canAct(unit.team)) return false;
     if (this.mode === "ai" && unit.team !== "player") return false;
+    if (this.dragInput?.isDragging()) return false;
+    if (this.archerInput?.isDragging()) return false;
     if (this.knightCurve?.isActive()) return false;
     return true;
+  }
+
+  private getChargeMode(): ChargeMode {
+    const value = this.registry.get(CHARGE_MODE_REGISTRY_KEY);
+    return isChargeMode(value) ? value : readStoredChargeMode();
   }
 
   private handleKnightLaunch(unit: Unit, vx: number, vy: number, curveAng: number): void {
@@ -485,10 +501,10 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  /** Dark out-of-bounds margin + grass-toned base, drawn behind the terrain tiles. */
+  /** Dark out-of-bounds rim + grass-toned base, drawn behind the terrain tiles. */
   private drawFieldBackground(): void {
     const g = this.add.graphics();
-    // Margin area (darker — out of bounds for units, available for drag/UI).
+    // Rim/HUD band (darker — out of bounds for units).
     g.fillStyle(0x1f1812, 1);
     g.fillRect(0, 0, FIELD_WIDTH, FIELD_HEIGHT);
     // Grass base under the tiles — hides any seam if a tile hasn't drawn yet.

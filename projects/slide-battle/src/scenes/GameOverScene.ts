@@ -2,6 +2,7 @@ import Phaser from "phaser";
 import type { Team, GameMode } from "../config/units";
 import { TEAM_COLORS } from "../config/units";
 import { Button } from "../ui/Button";
+import { crispTextStyle } from "../ui/textStyle";
 import { sounds } from "../audio/SoundManager";
 
 export interface GameOverData {
@@ -41,16 +42,16 @@ export class GameOverScene extends Phaser.Scene {
     }
 
     this.add
-      .text(width / 2, height / 2 - 80, titleText, {
+      .text(width / 2, height / 2 - 80, titleText, crispTextStyle({
         fontSize: "96px",
         color: titleColor,
         fontStyle: "bold",
-      })
+      }))
       .setOrigin(0.5)
       .setShadow(4, 4, "#0a0805", 8, true, true);
 
     this.add
-      .text(width / 2, height / 2 - 5, subtitle, { fontSize: "22px", color: "#f1e9d2" })
+      .text(width / 2, height / 2 - 5, subtitle, crispTextStyle({ fontSize: "22px", color: "#f1e9d2" }))
       .setOrigin(0.5);
 
     new Button(this, width / 2, height / 2 + 70, "Play Again", () => {

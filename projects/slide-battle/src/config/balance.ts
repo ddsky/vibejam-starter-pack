@@ -47,15 +47,12 @@ export const FIELD_WIDTH = 1280;
 export const FIELD_HEIGHT = 720;
 
 /**
- * Margins around the playable battlefield. The canvas stays at FIELD_WIDTH ×
- * FIELD_HEIGHT, but units are constrained to a smaller inner rectangle so
- * there's always at least MAX_DRAG_PIXELS of buffer space inside the canvas
- * for the player's cursor to extend into when launching from an edge unit.
- * The HUD overlays the top margin.
+ * Thin margins around the playable battlefield. Left/right/bottom are now just
+ * a visual/physics rim; top keeps enough clearance for the DOM HUD.
  */
-export const PLAYFIELD_MARGIN_X = 110;
-export const PLAYFIELD_MARGIN_TOP = 90;
-export const PLAYFIELD_MARGIN_BOTTOM = 110;
+export const PLAYFIELD_MARGIN_X = 16;
+export const PLAYFIELD_MARGIN_TOP = 84;
+export const PLAYFIELD_MARGIN_BOTTOM = 16;
 export const PLAYFIELD_LEFT = PLAYFIELD_MARGIN_X;
 export const PLAYFIELD_TOP = PLAYFIELD_MARGIN_TOP;
 export const PLAYFIELD_RIGHT = FIELD_WIDTH - PLAYFIELD_MARGIN_X;
@@ -69,8 +66,8 @@ export const PLAYFIELD_HEIGHT = PLAYFIELD_BOTTOM - PLAYFIELD_TOP;
  */
 export const TERRAIN_COLS = 20;
 export const TERRAIN_ROWS = 10;
-export const TERRAIN_CELL_W = PLAYFIELD_WIDTH / TERRAIN_COLS; // 53
-export const TERRAIN_CELL_H = PLAYFIELD_HEIGHT / TERRAIN_ROWS; // 52
+export const TERRAIN_CELL_W = PLAYFIELD_WIDTH / TERRAIN_COLS;
+export const TERRAIN_CELL_H = PLAYFIELD_HEIGHT / TERRAIN_ROWS;
 
 /** Rows kept flat-grass at the top & bottom so units never spawn on/under terrain. */
 export const TERRAIN_SPAWN_ROW_MARGIN = 2;

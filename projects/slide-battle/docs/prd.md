@@ -44,6 +44,17 @@ Movement works the same as with the swordsman. But the archar has two areas wher
 ### Knight
 The movement works exactly the same as the swordsman, but the knight can move in a curved line. After dragging and releasing the touch/click, the knight will not immediately slide but the user can control the curve of the movement by dragging the arrow left or right. Only after releasing a second time, the knight will start moving in the curved line. If the knight collides with an enemy unit, it will attack that unit. If it collides with a wall or another friendly unit, it will stop moving.
 
+### Bomber
+The bomber moves in a straight line. When activated, he explodes and damages all units in a certain radius around him. The damage is based on the distance from the explosion, with units closer to the explosion taking more damage. The bomber can be used strategically to damage multiple enemy units at once or to create space on the battlefield.
+
+### Mage
+The mage can move in a straight line. 
+He can pick a spell and cast it over a longer distance. The casting works like the archer's shooting. 
+Spells: 
+* Madness (confuses enemy units, causing them to move randomly for one turn) 
+* Heal (restores health to a friendly unit)
+* Livication (can turn water into water monsters, trees into tree monsters, and rocks into rock monsters. These monsters can be used to block enemy movement or to attack enemy units)
+
 ## Battlefield / Map
 The battlefield has NO GRID. It is an open area where players can freely move their units. The battlefield will have some obstacles (e.g., walls, rocks) that can block movement and line of sight for attacks. Players must navigate around these obstacles to effectively position their units and attack the opponent.
 

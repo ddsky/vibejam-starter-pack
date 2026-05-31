@@ -1,4 +1,5 @@
 import Phaser from "phaser";
+import { crispTextStyle } from "./textStyle";
 
 export interface ButtonOptions {
   width?: number;
@@ -31,11 +32,11 @@ export class Button extends Phaser.GameObjects.Container {
 
     this.bg = scene.add.rectangle(0, 0, width, height, this.bgColor).setStrokeStyle(2, 0xf1e9d2);
     this.label = scene.add
-      .text(0, 0, text, {
+      .text(0, 0, text, crispTextStyle({
         fontSize: opts.fontSize ?? "24px",
         color: opts.textColor ?? "#f1e9d2",
         fontStyle: "bold",
-      })
+      }))
       .setOrigin(0.5);
 
     this.add([this.bg, this.label]);

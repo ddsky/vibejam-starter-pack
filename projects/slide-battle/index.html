@@ -19,8 +19,235 @@
         overflow: hidden;
         font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
       }
+      #game-container {
+        width: 100vw;
+        height: 100vh;
+        position: relative;
+      }
       #game-container canvas {
         display: block;
+      }
+      .slide-battle-hud {
+        position: fixed;
+        z-index: 10;
+        pointer-events: none;
+        color: #f1e9d2;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+        font-weight: 800;
+        letter-spacing: 0;
+        text-rendering: geometricPrecision;
+        -webkit-font-smoothing: antialiased;
+      }
+      .slide-battle-hud__bar {
+        position: absolute;
+        top: clamp(8px, 1.2vw, 14px);
+        left: clamp(10px, 1.6vw, 20px);
+        right: clamp(10px, 1.6vw, 20px);
+        display: grid;
+        grid-template-columns:
+          minmax(40px, 110px)
+          minmax(58px, 128px)
+          minmax(62px, 132px)
+          minmax(145px, 280px)
+          minmax(88px, 300px)
+          minmax(54px, 132px);
+        gap: clamp(2px, 0.5vw, 14px);
+        align-items: center;
+        justify-content: space-between;
+      }
+      .slide-battle-hud__button,
+      .slide-battle-hud__turn-panel,
+      .slide-battle-hud__mode-control {
+        height: clamp(38px, 6.1vw, 56px);
+        border: 2px solid #f1e9d2;
+        box-shadow: inset 0 0 0 1px rgba(241, 233, 210, 0.28);
+      }
+      .slide-battle-hud__button {
+        pointer-events: auto;
+        width: 100%;
+        color: #f1e9d2;
+        font: inherit;
+        font-size: clamp(8px, 1.25vw, 16px);
+        cursor: pointer;
+      }
+      .slide-battle-hud__button--brown {
+        background: #3a3127;
+      }
+      .slide-battle-hud__button--green {
+        background: #3a6b35;
+      }
+      .slide-battle-hud__button--blue {
+        background: #3a5f9e;
+      }
+      .slide-battle-hud__button--red {
+        background: #8a3a2a;
+      }
+      .slide-battle-hud__button--brown:hover {
+        background: #4a4036;
+      }
+      .slide-battle-hud__button--green:hover {
+        background: #4a8243;
+      }
+      .slide-battle-hud__button--blue:hover {
+        background: #4670b8;
+      }
+      .slide-battle-hud__button--red:hover {
+        background: #a64a37;
+      }
+      .slide-battle-hud__button:active {
+        transform: scale(0.97);
+      }
+      .slide-battle-hud__mode-control {
+        pointer-events: auto;
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        overflow: hidden;
+        background: rgba(26, 21, 16, 0.9);
+      }
+      .slide-battle-hud__mode-button {
+        min-width: 0;
+        border: 0;
+        border-right: 1px solid rgba(241, 233, 210, 0.4);
+        background: rgba(58, 49, 39, 0.96);
+        color: #c9b896;
+        font: inherit;
+        font-size: clamp(7px, 0.95vw, 13px);
+        cursor: pointer;
+      }
+      .slide-battle-hud__mode-button:last-child {
+        border-right: 0;
+      }
+      .slide-battle-hud__mode-button:hover {
+        background: #4a4036;
+        color: #f1e9d2;
+      }
+      .slide-battle-hud__mode-button--selected {
+        background: #3a5f9e;
+        color: #ffffff;
+      }
+      .slide-battle-hud__mode-button--selected:hover {
+        background: #4670b8;
+      }
+      .slide-battle-hud__turn-panel {
+        display: flex;
+        min-width: 0;
+        align-items: center;
+        justify-content: center;
+        gap: clamp(3px, 0.8vw, 18px);
+        background: rgba(26, 21, 16, 0.86);
+      }
+      .slide-battle-hud__turn-label {
+        min-width: 0;
+        font-size: clamp(8px, 1.45vw, 20px);
+        white-space: nowrap;
+        text-shadow: 0 1px 0 #0a0805;
+      }
+      .slide-battle-hud__ap-list {
+        display: flex;
+        gap: clamp(2px, 0.55vw, 10px);
+      }
+      .slide-battle-hud__ap-dot {
+        width: clamp(8px, 1.5vw, 20px);
+        height: clamp(8px, 1.5vw, 20px);
+        border: 2px solid #f1e9d2;
+        border-radius: 50%;
+        box-shadow: 0 1px 0 #0a0805;
+      }
+      .slide-battle-hud__ap-dot--spent {
+        border-color: rgba(201, 184, 150, 0.65);
+      }
+      .slide-battle-hud--disabled {
+        display: none;
+      }
+      .slide-battle-menu {
+        position: fixed;
+        z-index: 10;
+        pointer-events: none;
+        color: #f1e9d2;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+        font-weight: 800;
+        letter-spacing: 0;
+        text-rendering: geometricPrecision;
+        -webkit-font-smoothing: antialiased;
+      }
+      .slide-battle-menu__fullscreen {
+        position: absolute;
+        top: clamp(14px, 2.2vw, 28px);
+        right: clamp(18px, 2.2vw, 36px);
+        width: clamp(132px, 13vw, 210px);
+        height: clamp(38px, 4.6vw, 64px);
+      }
+      .slide-battle-menu__center {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding-top: clamp(24px, 6vw, 72px);
+      }
+      .slide-battle-menu__title {
+        font-size: clamp(42px, 6.8vw, 92px);
+        line-height: 1;
+        text-shadow: 0 6px 0 #0a0805;
+        margin-bottom: clamp(18px, 2vw, 32px);
+      }
+      .slide-battle-menu__subtitle {
+        color: #c9b896;
+        font-size: clamp(14px, 1.8vw, 24px);
+        margin-bottom: clamp(50px, 8.6vw, 104px);
+      }
+      .slide-battle-menu__buttons {
+        display: grid;
+        width: clamp(230px, 28vw, 390px);
+        gap: clamp(12px, 1.6vw, 24px);
+      }
+      .slide-battle-menu__button {
+        pointer-events: auto;
+        height: clamp(46px, 5.4vw, 76px);
+        border: 2px solid #f1e9d2;
+        box-shadow: inset 0 0 0 1px rgba(241, 233, 210, 0.28);
+        color: #f1e9d2;
+        font: inherit;
+        font-size: clamp(17px, 2vw, 28px);
+        cursor: pointer;
+      }
+      .slide-battle-menu__button--blue {
+        background: #3a7bd5;
+      }
+      .slide-battle-menu__button--red {
+        background: #c4452d;
+      }
+      .slide-battle-menu__button--brown {
+        background: #5a4f43;
+      }
+      .slide-battle-menu__button--full {
+        background: #3a5f9e;
+        font-size: clamp(12px, 1.4vw, 18px);
+      }
+      .slide-battle-menu__button--blue:hover {
+        background: #4f8de0;
+      }
+      .slide-battle-menu__button--red:hover {
+        background: #d9573e;
+      }
+      .slide-battle-menu__button--brown:hover {
+        background: #6e6253;
+      }
+      .slide-battle-menu__button--full:hover {
+        background: #4670b8;
+      }
+      .slide-battle-menu__button:active {
+        transform: scale(0.97);
+      }
+      .slide-battle-menu__hint {
+        position: absolute;
+        left: 50%;
+        bottom: clamp(24px, 5vw, 60px);
+        transform: translateX(-50%);
+        color: #c9b896;
+        font-size: clamp(12px, 1.2vw, 16px);
+        white-space: nowrap;
       }
     </style>
   </head>

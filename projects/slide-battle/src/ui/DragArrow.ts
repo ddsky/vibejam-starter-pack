@@ -1,8 +1,10 @@
 import Phaser from "phaser";
 import { MAX_DRAG_PIXELS } from "../config/balance";
+import { crispTextStyle } from "./textStyle";
 
 export interface DragArrowOptions {
   fixedLength?: number; // for archer-shoot mode where length doesn't change
+  fixedPower?: number; // keeps color/thickness stable when another UI shows power
 }
 
 export class DragArrow extends Phaser.GameObjects.Graphics {
@@ -26,7 +28,7 @@ export class DragArrow extends Phaser.GameObjects.Graphics {
     this.clear();
     this.setVisible(true);
     const clamped = Phaser.Math.Clamp(magnitude, 0, MAX_DRAG_PIXELS);
-    const t = clamped / MAX_DRAG_PIXELS;
+    const t = opts.fixedPower ?? clamped / MAX_DRAG_PIXELS;
     const length = opts.fixedLength ?? Phaser.Math.Linear(40, 220, t);
     const thickness = Phaser.Math.Linear(4, 12, t);
     const color = Phaser.Display.Color.Interpolate.ColorWithColor(
@@ -44,7 +46,7 @@ export class DragArrow extends Phaser.GameObjects.Graphics {
     const tipX = originX + nx * length;
     const tipY = originY + ny * length;
 
-    const isMax = magnitude >= MAX_DRAG_PIXELS;
+    const isMax = opts.fixedPower === undefined && magnitude >= MAX_DRAG_PIXELS;
 
     // Optional glow outline when fully charged so the player sees "MAX".
     if (isMax) {
@@ -74,14 +76,14 @@ export class DragArrow extends Phaser.GameObjects.Graphics {
     if (isMax) {
       if (!this.maxLabel) {
         this.maxLabel = this.scene.add
-          .text(0, 0, "MAX!", {
+          .text(0, 0, "MAX!", crispTextStyle({
             fontFamily: "system-ui, -apple-system, Segoe UI, sans-serif",
             fontSize: "14px",
             color: "#ffffff",
             fontStyle: "bold",
             stroke: "#a01a10",
             strokeThickness: 4,
-          })
+          }))
           .setOrigin(0.5)
           .setDepth(21);
       }
